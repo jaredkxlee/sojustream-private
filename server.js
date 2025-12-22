@@ -13,15 +13,14 @@ const RD_TOKEN = 'VNED7ID5VRKYQJY7ICAX32N6MSPAJ3OO7REGYZ5NGVWZL7NJ2MCQ';
 // ⬆️ ⬆️ ⬆️  END CONFIGURATION  ⬆️ ⬆️ ⬆️
 // =========================================================================
 
-// FIX: Back to FlixHQ (Stable) because SuperStream crashed the server
 const provider = new MOVIES.FlixHQ(); 
 
 const builder = new addonBuilder({
-    id: "org.community.sojustream.safe",
-    version: "3.1.0",
-    name: "SojuStream (Safe)",
+    id: "org.community.sojustream.complete",
+    version: "3.2.0",
+    name: "SojuStream (Fixed)",
     description: "K-Content • FlixHQ • No Porn • English",
-    resources: ["catalog", "stream"],
+    resources: ["catalog", "meta", "stream"], // <--- Added "meta" resource
     types: ["movie", "series"],
     catalogs: [
         { type: "movie", id: "kmovie_popular", name: "Popular K-Movies" },
@@ -32,20 +31,16 @@ const builder = new addonBuilder({
     idPrefixes: ["tmdb:"]
 });
 
-// --- 1. CATALOG HANDLER (WITH "JAPANESE MOM" BLOCKER) ---
+// --- 1. CATALOG HANDLER (THE MENU) ---
 builder.defineCatalogHandler(async function(args) {
     const page = (args.extra && args.extra.skip ? (args.extra.skip / 20) + 1 : 1);
     const date = new Date().toISOString().split('T')[0];
     let fetchUrl = '';
-
-    // 🔒 BASE FILTERS: English, No Adult, Korean Only
     const baseParams = `api_key=${TMDB_KEY}&language=en-US&include_adult=false&with_original_language=ko&page=${page}`;
 
-    // A. SEARCH
     if (args.extra && args.extra.search) {
         fetchUrl = `https://api.themoviedb.org/3/search/multi?api_key=${TMDB_KEY}&query=${args.extra.search}&language=en-US&include_adult=false`;
     } 
-    // B. CATALOGS (High Vote Counts to block trash)
     else if (args.id === 'kmovie_popular') fetchUrl = `https://api.themoviedb.org/3/discover/movie?${baseParams}&sort_by=vote_count.desc&vote_count.gte=100`;
     else if (args.id === 'kmovie_new') fetchUrl = `https://api.themoviedb.org/3/discover/movie?${baseParams}&sort_by=primary_release_date.desc&primary_release_date.lte=${date}&vote_count.gte=10`;
     else if (args.id === 'kdrama_popular') fetchUrl = `https://api.themoviedb.org/3/discover/tv?${baseParams}&sort_by=vote_count.desc&vote_count.gte=100`;
@@ -55,15 +50,12 @@ builder.defineCatalogHandler(async function(args) {
         const response = await axios.get(fetchUrl);
         let items = response.data.results || [];
 
-        // 🛡️ THE NUCLEAR FILTER 🛡️
-        // This manually checks every single title and hides it if it's suspicious
+        // 🛡️ TITLE FILTER
         items = items.filter(item => {
             const title = (item.title || item.name || "").toLowerCase();
-            const badWords = ["erotic", "sex", "porn", "japanese mom", "18+", "uncensored", "av idol"];
-            
-            if (!item.poster_path) return false; // Hide if no poster
-            if (badWords.some(word => title.includes(word))) return false; // Hide if bad word found
-            
+            const badWords = ["erotic", "sex", "porn", "japanese mom", "18+", "uncensored"];
+            if (!item.poster_path) return false;
+            if (badWords.some(word => title.includes(word))) return false;
             return true;
         });
 
@@ -79,7 +71,37 @@ builder.defineCatalogHandler(async function(args) {
     } catch (e) { return { metas: [] }; }
 });
 
-// --- 2. STREAM HANDLER (FLIXHQ) ---
+// --- 2. META HANDLER (MISSING PIECE: FIXES "CONTENT NOT FOUND") ---
+builder.defineMetaHandler(async function(args) {
+    if (!args.id.startsWith("tmdb:")) return { meta: {} };
+    const tmdbId = args.id.split(":")[1];
+    const type = args.type === 'movie' ? 'movie' : 'tv';
+
+    try {
+        const url = `https://api.themoviedb.org/3/${type}/${tmdbId}?api_key=${TMDB_KEY}&language=en-US`;
+        const meta = (await axios.get(url)).data;
+
+        return {
+            meta: {
+                id: args.id,
+                type: args.type,
+                name: meta.title || meta.name,
+                poster: `https://image.tmdb.org/t/p/w500${meta.poster_path}`,
+                background: meta.backdrop_path ? `https://image.tmdb.org/t/p/original${meta.backdrop_path}` : null,
+                description: meta.overview,
+                releaseInfo: (meta.release_date || meta.first_air_date || "").substring(0, 4),
+                // We add a dummy video for movies to ensure buttons appear
+                // For series, Stremio handles episodes automatically via catalog/streams usually, 
+                // but detailed episode meta requires more requests. 
+                // This basic meta is enough to fix the "Content Not Found" screen.
+            }
+        };
+    } catch (e) {
+        return { meta: {} };
+    }
+});
+
+// --- 3. STREAM HANDLER ---
 builder.defineStreamHandler(async function(args) {
     if (!args.id.startsWith("tmdb:")) return { streams: [] };
     const tmdbId = args.id.split(":")[1];
@@ -102,7 +124,7 @@ builder.defineStreamHandler(async function(args) {
             
             let epId = null;
             if (info.episodes && info.episodes.length > 0) {
-                epId = info.episodes[0].id; // Default to Ep 1
+                epId = info.episodes[0].id; 
             } else {
                 epId = match.id;
             }
