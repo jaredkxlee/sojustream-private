@@ -1,0 +1,14 @@
+{
+  "name": "sojustream",
+  "version": "1.0.0",
+  "description": "Private Stremio Addon",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@consumet/extensions": "^1.8.7",
+    "axios": "^1.13.2",
+    "stremio-addon-sdk": "^1.6.10"
+  }
+}
