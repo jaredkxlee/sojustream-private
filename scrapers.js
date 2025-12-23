@@ -1,3 +1,4 @@
+process.env.PROXY_PASS = "https://jaredlkx:12345678@jaredlkx-soju-tunnel.hf.space:443";
 require('dotenv').config();
 const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 const axios = require('axios');
@@ -57,6 +58,8 @@ function getProxiedUrl(targetUrl) {
 builder.defineCatalogHandler(async (args) => {
     console.log(`[v16] Requesting ${args.id}`); // 👈 LOOK FOR [v16] IN LOGS
     const domain = "kisskh.do";
+// ADD THIS LINE RIGHT BELOW IT:
+console.log("TESTING URL:", `https://api.themoviedb.org/3/tv/on_the_air?api_key=${process.env.TMDB_KEY}`);
     let targetUrl = "";
     const page = args.extra && args.extra.skip ? Math.floor(args.extra.skip / 20) + 1 : 1;
     
