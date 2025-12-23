@@ -10,8 +10,10 @@
   "dependencies": {
     "@consumet/extensions": "^1.8.7",
     "axios": "^1.13.2",
+    "axios-cookiejar-support": "^6.0.5",
     "dotenv": "^17.2.3",
     "https-proxy-agent": "^7.0.6",
-    "stremio-addon-sdk": "^1.6.10"
+    "stremio-addon-sdk": "^1.6.10",
+    "tough-cookie": "^6.0.0"
   }
 }
