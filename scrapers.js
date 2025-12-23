@@ -31,6 +31,12 @@ const builder = new addonBuilder({
             type: "series",
             name: "KissKH: Upcoming",
             extra: [{ name: "skip", isRequired: false }]
+        },
+        {
+            id: "most_popular",
+            type: "series",
+            name: "KissKH: Most Popular",
+            extra: [{ name: "skip", isRequired: false }]
         }
     ]
 });
@@ -73,24 +79,23 @@ builder.defineCatalogHandler(async (args) => {
     const page = args.extra && args.extra.skip ? Math.floor(args.extra.skip / 20) + 1 : 1;
     let targetUrl = "";
     
-    // --- YOUR EXACT API LOGIC ---
+    // --- YOUR EXACT APIS ---
     if (args.extra && args.extra.search) {
-        // Search API
         targetUrl = `https://kisskh.do/api/DramaList/Search?q=${encodeURIComponent(args.extra.search)}&type=0`;
     } else {
         switch(args.id) {
             case "latest_updates":
-                // Latest Updates API
                 targetUrl = `https://kisskh.do/api/DramaList/List?page=${page}&type=0&sub=0&country=0&status=0&order=2`;
                 break;
             case "top_kdrama":
-                // Top K-Drama API
                 targetUrl = `https://kisskh.do/api/DramaList/List?page=${page}&type=0&sub=0&country=2&status=0&order=1`;
                 break;
             case "upcoming_drama":
-                // Upcoming API
                 targetUrl = `https://kisskh.do/api/DramaList/List?page=${page}&type=0&sub=0&country=0&status=3&order=2`;
                 break;
+            case "most_popular":
+                 targetUrl = `https://kisskh.do/api/DramaList/MostSearch?ispc=true`;
+                 break;
             default:
                 return { metas: [] };
         }
@@ -99,7 +104,6 @@ builder.defineCatalogHandler(async (args) => {
     const data = await fetchWithFlare(targetUrl);
     if (!data) return { metas: [] };
 
-    // Handle "results" vs "data" wrappers
     const items = data.results || data.data || data;
 
     if (Array.isArray(items)) {
@@ -107,10 +111,9 @@ builder.defineCatalogHandler(async (args) => {
             id: `kisskh:${item.id}`,
             type: "series",
             name: item.title,
-            // 🔥 RAW LANDSCAPE THUMBNAIL (No TMDB)
-            poster: item.thumbnail, 
+            poster: item.thumbnail, // Landscape (Fast)
             description: item.status || "Watch on KissKH",
-            posterShape: 'landscape' // Hint to Stremio (some clients respect this)
+            posterShape: 'landscape'
         })) };
     }
     return { metas: [] };
@@ -118,7 +121,6 @@ builder.defineCatalogHandler(async (args) => {
 
 // --- 2. META HANDLER (Detail View) ---
 builder.defineMetaHandler(async (args) => {
-    // Only handle our custom IDs
     if (!args.id.startsWith("kisskh:")) return { meta: {} };
     
     const kisskhId = args.id.split(":")[1];
@@ -132,51 +134,42 @@ builder.defineMetaHandler(async (args) => {
             id: args.id,
             type: "series",
             name: data.title,
-            poster: data.thumbnail,     // Landscape
-            background: data.thumbnail, // Landscape
+            poster: data.thumbnail,
+            background: data.thumbnail,
             description: data.description || "No description.",
             releaseInfo: data.releaseDate,
             genres: data.genres ? data.genres.map(g => g.name) : [],
-            // Important: We must list videos so Stremio knows episodes exist
             videos: (data.episodes || []).map(ep => ({
-                id: `kisskh:${kisskhId}:${1}:${ep.number}`, // Format: ID:Season:Episode
+                id: `kisskh:${kisskhId}:${1}:${ep.number}`,
                 title: `Episode ${ep.number}`,
                 season: 1,
                 episode: parseInt(ep.number) || 1,
                 released: new Date().toISOString()
-            })).reverse() // KissKH lists newest first, Stremio likes oldest first usually, but reverse is safer
+            })).reverse()
         }
     };
 });
 
-// --- 3. STREAM HANDLER (Fixed Episode Selection) ---
+// --- 3. STREAM HANDLER ---
 builder.defineStreamHandler(async (args) => {
     if (!args.id.startsWith("kisskh:")) return { streams: [] };
 
     console.log(`[v24] Stream Request: ${args.id}`);
-
-    // Parse the Stremio ID: kisskh:DRAMA_ID:SEASON:EPISODE
     const parts = args.id.split(":");
     const dramaId = parts[1];
-    const episodeNum = parts[3]; // <--- This is the key fix
+    const episodeNum = parts[3]; 
 
-    if (!dramaId || !episodeNum) {
-        console.error("[v24] Invalid ID format for stream");
-        return { streams: [] };
-    }
+    if (!dramaId || !episodeNum) return { streams: [] };
 
     try {
-        // 1. Get Drama Details to find the specific Episode ID
         const detailUrl = `https://kisskh.do/api/DramaList/Drama/${dramaId}?isMovie=false`;
         const data = await fetchWithFlare(detailUrl);
         
         if (!data || !data.episodes) return { streams: [] };
 
-        // 2. Find the exact episode object
         const targetEp = data.episodes.find(e => e.number == episodeNum);
 
         if (targetEp) {
-            // 3. Get the Video Link
             const videoApiUrl = `https://kisskh.do/api/ExternalLoader/VideoService/${targetEp.id}?device=2`;
             const videoData = await fetchWithFlare(videoApiUrl);
             
