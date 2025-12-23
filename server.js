@@ -3,7 +3,7 @@ const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 const axios = require('axios');
 
 // 🔒 CONFIGURATION
-const TMDB_KEY = process.env.TMDB_KEY;
+const TMDB_KEY = b80e5b1b965da72a2a23ba5680cb778a;
 
 const builder = new addonBuilder({
     id: "org.sojustream.catalog.safe", 
