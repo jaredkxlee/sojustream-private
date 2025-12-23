@@ -2,19 +2,10 @@ require('dotenv').config();
 const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 const axios = require('axios');
 
-<<<<<<< HEAD
-=======
-// ⬇️ Add these two lines
->>>>>>> 689d87ce35c9569fbe4825c1b574d2ddeb294ebf
 const { wrapper } = require('axios-cookiejar-support');
 const tough = require('tough-cookie');
 const jar = new tough.CookieJar();
 const client = wrapper(axios.create({ jar }));
-
-require('dotenv').config();
-const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
-const axios = require('axios');
-
 // 🔒 CONFIGURATION
 const FLARESOLVERR_URL = "https://soju-proxy.onrender.com/v1"; 
 const TMDB_KEY = "b80e5b1b965da72a2a23ba5680cb778a"; // Re-added for clean posters
