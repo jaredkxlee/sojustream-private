@@ -3,10 +3,9 @@ const { MOVIES } = require("@consumet/extensions");
 const axios = require('axios');
 
 // =========================================================================
-// ⬇️ ⬇️ ⬇️  USER CONFIGURATION  ⬇️ ⬇️ ⬇️
+// 🔒 SECURE CONFIGURATION (Keys come from Render Dashboard)
 // =========================================================================
 
-// 🔒 Keys are now safe in process.env
 const TMDB_KEY = process.env.TMDB_KEY; 
 const RD_TOKEN = process.env.RD_TOKEN;     
 
@@ -17,14 +16,13 @@ const RD_TOKEN = process.env.RD_TOKEN;
 const provider = new MOVIES.FlixHQ(); 
 
 const builder = new addonBuilder({
-    id: "org.community.sojustream.v55",
-    version: "5.5.0",
-    name: "SojuStream (Final)",
-    description: "K-Content • FlixHQ • No Porn • English",
+    id: "org.sojustream.independent",
+    version: "6.0.0",
+    name: "SojuStream (Env)",
+    description: "Full Provider • Works with Cinabye • No Porn",
     
-    // ⚠️ CRITICAL FIX 1: Removed "meta" from this list.
-    // This forces Stremio to use Cinemeta for posters/plot (Fixes "Content Not Found")
-    resources: ["catalog", "stream"], 
+    // ✅ ENABLED "META": Required for Stremio to work without Cinemeta
+    resources: ["catalog", "meta", "stream"], 
     
     types: ["movie", "series"],
     catalogs: [
@@ -36,12 +34,11 @@ const builder = new addonBuilder({
     idPrefixes: ["tmdb:"]
 });
 
-// --- 1. CATALOG HANDLER (SAFE & CLEAN) ---
+// --- 1. CATALOG HANDLER (THE MENU) ---
 builder.defineCatalogHandler(async function(args) {
     const page = (args.extra && args.extra.skip ? (args.extra.skip / 20) + 1 : 1);
     const date = new Date().toISOString().split('T')[0];
     let fetchUrl = '';
-
     const baseParams = `api_key=${TMDB_KEY}&language=en-US&include_adult=false&with_original_language=ko&page=${page}`;
 
     if (args.extra && args.extra.search) {
@@ -56,7 +53,7 @@ builder.defineCatalogHandler(async function(args) {
         const response = await axios.get(fetchUrl);
         let items = response.data.results || [];
 
-        // 🛡️ TITLE FILTER
+        // 🛡️ NO PORN FILTER
         items = items.filter(item => {
             const title = (item.title || item.name || "").toLowerCase();
             const badWords = ["erotic", "sex", "porn", "japanese mom", "18+", "uncensored"];
@@ -77,11 +74,61 @@ builder.defineCatalogHandler(async function(args) {
     } catch (e) { return { metas: [] }; }
 });
 
-// --- 2. STREAM HANDLER (CRITICAL FIX 2: Supports Series Episodes) ---
+// --- 2. META HANDLER (THE BRAIN) ---
+// This enables the addon to work even if you disable Cinemeta
+builder.defineMetaHandler(async function(args) {
+    if (!args.id.startsWith("tmdb:")) return {wb: true}; 
+
+    const tmdbId = args.id.split(":")[1];
+    const type = args.type; 
+
+    try {
+        const url = `https://api.themoviedb.org/3/${type === 'series' ? 'tv' : 'movie'}/${tmdbId}?api_key=${TMDB_KEY}&language=en-US`;
+        const meta = (await axios.get(url)).data;
+
+        const result = {
+            id: args.id,
+            type: type,
+            name: meta.title || meta.name,
+            poster: `https://image.tmdb.org/t/p/w500${meta.poster_path}`,
+            background: meta.backdrop_path ? `https://image.tmdb.org/t/p/original${meta.backdrop_path}` : null,
+            description: meta.overview,
+            releaseInfo: (meta.release_date || meta.first_air_date || "").substring(0, 4),
+            videos: [] 
+        };
+
+        if (type === 'series' || type === 'tv') {
+            try {
+                // Fetch Season 1
+                const s1Url = `https://api.themoviedb.org/3/tv/${tmdbId}/season/1?api_key=${TMDB_KEY}&language=en-US`;
+                const s1Data = (await axios.get(s1Url)).data;
+                
+                result.videos = s1Data.episodes.map(ep => ({
+                    id: `tmdb:${tmdbId}:${ep.season_number}:${ep.episode_number}`,
+                    title: ep.name || `Episode ${ep.episode_number}`,
+                    released: new Date(ep.air_date).toISOString(),
+                    thumbnail: ep.still_path ? `https://image.tmdb.org/t/p/w500${ep.still_path}` : null,
+                    episode: ep.episode_number,
+                    season: ep.season_number,
+                }));
+            } catch (e) {}
+        } 
+        else {
+            result.videos = [{
+                id: `tmdb:${tmdbId}`,
+                title: meta.title,
+                released: new Date(meta.release_date).toISOString()
+            }];
+        }
+        return { meta: result };
+    } catch (e) { return { meta: {} }; }
+});
+
+// --- 3. STREAM HANDLER (FLIXHQ) ---
 builder.defineStreamHandler(async function(args) {
     if (!args.id.startsWith("tmdb:")) return { streams: [] };
 
-    // PARSE ID: Handles "tmdb:123" (Movie) AND "tmdb:123:1:5" (Series S1 E5)
+    // Supports "tmdb:123" AND "tmdb:123:1:5"
     const parts = args.id.split(":");
     const tmdbId = parts[1];
     const season = parts[2] ? parseInt(parts[2]) : null;
@@ -89,18 +136,16 @@ builder.defineStreamHandler(async function(args) {
 
     let title = "";
     try {
-        // Fetch English Title from TMDB
         const type = args.type === 'movie' ? 'movie' : 'tv';
         const meta = (await axios.get(`https://api.themoviedb.org/3/${type}/${tmdbId}?append_to_response=external_ids&api_key=${TMDB_KEY}&language=en-US`)).data;
         title = meta.title || meta.name;
     } catch (e) { return { streams: [] }; }
 
-    console.log(`🔍 Searching FlixHQ for: ${title} ${season ? `(S${season} E${episode})` : ''}`);
+    console.log(`🔍 Searching: ${title}`);
     const streams = [];
 
     try {
-        // FUZZY SEARCH: Clean symbols from title
-        const cleanTitle = title.replace(/[^a-zA-Z0-9 ]/g, " "); 
+        const cleanTitle = title.replace(/[^a-zA-Z0-9 ]/g, " ");
         const search = await provider.search(cleanTitle);
         
         if (search.results.length > 0) {
@@ -108,35 +153,26 @@ builder.defineStreamHandler(async function(args) {
             const info = await provider.fetchMediaInfo(match.id);
             
             let targetEpId = null;
-
-            if (args.type === 'series' && season && episode) {
-                // SERIES LOGIC: Find the exact episode
+            if (season && episode) {
                 const epObj = info.episodes.find(e => e.season === season && e.number === episode);
-                if (epObj) {
-                    targetEpId = epObj.id;
-                } else {
-                    console.log(`   ⚠️ Episode S${season}E${episode} not found on FlixHQ.`);
-                }
+                if (epObj) targetEpId = epObj.id;
             } else {
-                // MOVIE LOGIC: Use the main ID (or first 'episode' which is the movie)
                 targetEpId = (info.episodes && info.episodes.length > 0) ? info.episodes[0].id : match.id;
             }
             
-            // FETCH STREAM
             if (targetEpId) {
                 const sources = await provider.fetchEpisodeSources(targetEpId, match.id);
-                // Try to find the best quality
                 const best = sources.sources.find(s => s.quality === 'auto' || s.quality === '1080p') || sources.sources[0];
                 
                 if (best) {
                     streams.push({
-                        title: `⚡ FlixHQ - ${title} ${season ? `S${season}E${episode}` : '[Movie]'}`,
+                        title: `⚡ FlixHQ - ${title} ${season ? `S${season}E${episode}` : ''}`,
                         url: best.url
                     });
                 }
             }
         }
-    } catch (e) { console.log("FlixHQ Error:", e.message); }
+    } catch (e) { console.log("Stream Error:", e.message); }
 
     return { streams: streams };
 });
