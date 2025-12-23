@@ -7,9 +7,16 @@ const TMDB_KEY = process.env.TMDB_KEY;
 const PROXY_URL = "https://jaredkx-soju-tunnel.hf.space"; 
 const PROXY_PASS = process.env.PROXY_PASS; 
 
+// Browser headers to prevent "EmptyContent" / 403 errors
+const browserHeaders = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Referer": "https://kisskh.co/",
+    "Origin": "https://kisskh.co"
+};
+
 const builder = new addonBuilder({
     id: "org.sojustream.complete",
-    version: "3.0.0",
+    version: "3.1.0",
     name: "SojuStream (KissKH Catalog & Links)",
     description: "Multi-source Asian content via MediaFlow Proxy",
     resources: ["catalog", "stream"], 
@@ -25,7 +32,7 @@ const builder = new addonBuilder({
     ]
 });
 
-// --- 1. CATALOG HANDLER ---
+// --- 1. CATALOG HANDLER (Fixed "EmptyContent" logic) ---
 builder.defineCatalogHandler(async function(args) {
     if (args.id === "kisskh_drama") {
         const page = args.extra && args.extra.skip ? (args.extra.skip / 20) + 1 : 1;
@@ -36,19 +43,22 @@ builder.defineCatalogHandler(async function(args) {
         }
 
         try {
-            const response = await axios.get(url);
+            const response = await axios.get(url, { headers: browserHeaders });
             const items = response.data.results || response.data;
+            
+            if (!Array.isArray(items)) return { metas: [] };
+
             return {
                 metas: items.map(item => ({
                     id: `tmdb:${item.id}`,
                     type: "series",
                     name: item.title,
                     poster: item.thumbnail,
-                    description: `KissKH Library Item`
+                    description: `Asian Content from KissKH`
                 }))
             };
         } catch (e) { 
-            console.error("Catalog Error:", e.message);
+            console.error("Catalog API Error:", e.message);
             return { metas: [] }; 
         }
     }
@@ -61,7 +71,6 @@ builder.defineStreamHandler(async function(args) {
     let tmdbId, season, episode;
 
     try {
-        // Parse IDs (Support both tt and tmdb)
         if (args.id.startsWith("tt")) {
             const findUrl = `https://api.themoviedb.org/3/find/${args.id.split(':')[0]}?api_key=${TMDB_KEY}&external_source=imdb_id`;
             const findRes = await axios.get(findUrl);
@@ -83,19 +92,18 @@ builder.defineStreamHandler(async function(args) {
         const meta = (await axios.get(`https://api.themoviedb.org/3/${type}/${tmdbId}?api_key=${TMDB_KEY}`)).data;
         const title = meta.name || meta.title;
 
-        // Search KissKH for the stream
-        const searchRes = await axios.get(`https://kisskh.co/api/DramaList/Search?q=${encodeURIComponent(title)}&type=0`);
+        const searchRes = await axios.get(`https://kisskh.co/api/DramaList/Search?q=${encodeURIComponent(title)}&type=0`, { headers: browserHeaders });
         if (searchRes.data && searchRes.data[0]) {
             const drama = searchRes.data[0];
-            const detail = await axios.get(`https://kisskh.co/api/DramaList/Drama/${drama.id}?isMovie=${args.type === 'movie'}`);
+            const detail = await axios.get(`https://kisskh.co/api/DramaList/Drama/${drama.id}?isMovie=${args.type === 'movie'}`, { headers: browserHeaders });
             const targetEpNum = episode || 1;
             const ep = detail.data.episodes.find(e => e.number == targetEpNum);
             
             if (ep) {
-                const streamInfo = await axios.get(`https://kisskh.co/api/ExternalLoader/VideoService/${ep.id}?device=2`);
+                const streamInfo = await axios.get(`https://kisskh.co/api/ExternalLoader/VideoService/${ep.id}?device=2`, { headers: browserHeaders });
                 const videoUrl = streamInfo.data.Video;
-                const headers = JSON.stringify({ "Referer": "https://kisskh.co/" });
-                const proxiedUrl = `${PROXY_URL}/proxy/stream?url=${encodeURIComponent(videoUrl)}&api_password=${PROXY_PASS}&headers=${encodeURIComponent(headers)}`;
+                const proxyHeaders = JSON.stringify({ "Referer": "https://kisskh.co/" });
+                const proxiedUrl = `${PROXY_URL}/proxy/stream?url=${encodeURIComponent(videoUrl)}&api_password=${PROXY_PASS}&headers=${encodeURIComponent(proxyHeaders)}`;
                 
                 streams.push({
                     name: "⚡ Soju-Tunnel (KissKH)",
@@ -111,7 +119,7 @@ builder.defineStreamHandler(async function(args) {
     return { streams };
 });
 
-// ✅ RENDER PORT BINDING
+// ✅ RENDER PORT BINDING (Optimized for Render's detection)
 serveHTTP(builder.getInterface(), { 
     port: process.env.PORT || 10000, 
     host: "0.0.0.0" 
