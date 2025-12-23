@@ -7,6 +7,7 @@ const TMDB_KEY = process.env.TMDB_KEY;
 const PROXY_URL = "https://jaredkx-soju-tunnel.hf.space"; 
 const PROXY_PASS = process.env.PROXY_PASS; 
 
+// Mandatory headers to prevent "EmptyContent" / 403 blocks
 const browserHeaders = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     "Referer": "https://kisskh.do/",
@@ -14,13 +15,13 @@ const browserHeaders = {
 };
 
 const builder = new addonBuilder({
-    id: "org.sojustream.final",
-    version: "5.0.0",
-    name: "SojuStream (Fixed & Multi-Catalog)",
-    description: "Browse Top, Latest, and Upcoming Asian Dramas from KissKH.do",
+    id: "org.sojustream.do.v6", // Changed ID to force Stremio cache refresh
+    version: "6.0.0",
+    name: "SojuStream Official",
+    description: "Browse Top, Latest, and Upcoming Dramas from KissKH.do",
     resources: ["catalog", "stream"], 
     types: ["series", "movie"],
-    idPrefixes: ["tmdb:", "tt"],
+    idPrefixes: ["tmdb:", "tt"], // Mandatory for Stremio to recognize the items
     catalogs: [
         {
             id: "top_kdrama",
@@ -48,6 +49,7 @@ builder.defineCatalogHandler(async (args) => {
     let url = "";
     const page = args.extra && args.extra.skip ? Math.floor(args.extra.skip / 20) + 1 : 1;
 
+    // Handle Search or Category Browsing
     if (args.extra && args.extra.search) {
         url = `https://kisskh.do/api/DramaList/Search?q=${encodeURIComponent(args.extra.search)}&type=0`;
     } else {
@@ -69,15 +71,16 @@ builder.defineCatalogHandler(async (args) => {
     try {
         const response = await axios.get(url, { headers: browserHeaders });
         const items = response.data.results || response.data;
+        
         if (!Array.isArray(items)) return { metas: [] };
 
+        // Map KissKH fields to Stremio Meta format
         return {
             metas: items.map(item => ({
                 id: `tmdb:${item.id}`,
                 type: "series",
-                name: item.title,
-                poster: item.thumbnail,
-                description: `Watch on KissKH via Soju-Tunnel`
+                name: item.title,      // KissKH 'title' -> Stremio 'name'
+                poster: item.thumbnail // KissKH 'thumbnail' -> Stremio 'poster'
             }))
         };
     } catch (e) { 
