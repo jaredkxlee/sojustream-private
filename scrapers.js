@@ -5,14 +5,15 @@ const axios = require('axios');
 // 🔒 CONFIGURATION
 const TMDB_KEY = process.env.TMDB_KEY;
 const PROXY_URL = "https://jaredlkx-soju-tunnel.hf.space"; 
-const PROXY_PASS = process.env.PROXY_PASS; 
+// 🛡️ AUTO-FIX: Trims hidden spaces from the password
+const PROXY_PASS = (process.env.PROXY_PASS || "").trim();
 
 const builder = new addonBuilder({
-    id: "org.sojustream.jared.v14", 
-    version: "14.0.1",
-    name: "SojuStream (Fixed Stream)",
+    id: "org.sojustream.jared.v15", 
+    version: "15.0.0",
+    name: "SojuStream (Trimmed Auth)",
     description: "KissKH via MediaFlow",
-    resources: ["catalog", "stream"], // 👈 This line promises streams...
+    resources: ["catalog", "stream"], 
     types: ["series", "movie"],
     idPrefixes: ["tmdb:", "tt"],
     catalogs: [
@@ -20,12 +21,24 @@ const builder = new addonBuilder({
             id: "latest_updates",
             type: "series",
             name: "KissKH: Latest Updates",
-            extra: [{ name: "search", isRequired: false }]
+            extra: [{ name: "search", isRequired: false }, { name: "skip", isRequired: false }]
+        },
+        {
+            id: "top_kdrama",
+            type: "series",
+            name: "KissKH: Top K-Drama",
+            extra: [{ name: "skip", isRequired: false }]
+        },
+        {
+            id: "upcoming_drama",
+            type: "series",
+            name: "KissKH: Upcoming",
+            extra: [{ name: "skip", isRequired: false }]
         }
     ]
 });
 
-// ✅ HELPER: SAFE PROXY URL BUILDER
+// ✅ HELPER: PROXY URL BUILDER
 function getProxiedUrl(targetUrl) {
     const headers = { 
         "Referer": "https://kisskh.do/",
@@ -42,45 +55,71 @@ function getProxiedUrl(targetUrl) {
 
 // --- 1. CATALOG HANDLER ---
 builder.defineCatalogHandler(async (args) => {
-    console.log(`[v14] Requesting ${args.id}`); 
+    console.log(`[v15] Requesting ${args.id}`); 
     const domain = "kisskh.do";
     let targetUrl = "";
+    const page = args.extra && args.extra.skip ? Math.floor(args.extra.skip / 20) + 1 : 1;
     
+    // ✅ USING YOUR EXACT API FINDINGS
     if (args.extra && args.extra.search) {
         targetUrl = `https://${domain}/api/DramaList/Search?q=${encodeURIComponent(args.extra.search)}&type=0`;
     } else {
-        targetUrl = `https://${domain}/api/DramaList/List?page=1&type=0&sub=0&country=0&status=0&order=2`;
+        switch(args.id) {
+            case "latest_updates":
+                // Your finding: type=0&sub=0&country=0&status=0&order=2
+                targetUrl = `https://${domain}/api/DramaList/List?page=${page}&type=0&sub=0&country=0&status=0&order=2`;
+                break;
+            case "top_kdrama":
+                // Your finding: country=2...order=1
+                targetUrl = `https://${domain}/api/DramaList/List?page=${page}&type=0&sub=0&country=2&status=0&order=1`;
+                break;
+            case "upcoming_drama":
+                // Your finding: status=3...order=2
+                targetUrl = `https://${domain}/api/DramaList/List?page=${page}&type=0&sub=0&country=0&status=3&order=2`;
+                break;
+            default:
+                return { metas: [] };
+        }
     }
 
     try {
         const proxiedUrl = getProxiedUrl(targetUrl);
+        // Debug Log: Shows password length to verify it's not empty
+        console.log(`[v15] Connecting with password length: ${PROXY_PASS.length}`);
+        
         const response = await axios.get(proxiedUrl, { timeout: 15000 });
         const items = response.data.results || response.data;
 
         if (!Array.isArray(items)) {
-            console.error("[v14] Proxy returned invalid data:", JSON.stringify(response.data).substring(0, 100));
+            // Check if it's the "MostSearch" format which wraps in 'data'
+            if (response.data.data && Array.isArray(response.data.data)) {
+                 return { metas: mapItems(response.data.data) };
+            }
+            console.error("[v15] Proxy returned invalid data structure");
             return { metas: [] };
         }
 
-        return {
-            metas: items.map(item => ({
-                id: `tmdb:${item.id}`,
-                type: "series",
-                name: item.title,
-                poster: item.thumbnail,
-                description: "Watch on KissKH"
-            }))
-        };
+        return { metas: mapItems(items) };
 
     } catch (e) {
-        if (e.response) console.error(`[v14] Proxy Error ${e.response.status}:`, e.response.data);
-        else console.error("[v14] Connection Error:", e.message);
+        if (e.response) console.error(`[v15] Proxy Error ${e.response.status}:`, e.response.data);
+        else console.error("[v15] Connection Error:", e.message);
         return { metas: [] };
     }
 });
 
-// --- 2. STREAM HANDLER (THIS WAS MISSING) ---
-// 👈 You must include this because 'resources' says ["stream"]
+// Helper to map items
+function mapItems(items) {
+    return items.map(item => ({
+        id: `tmdb:${item.id}`,
+        type: "series",
+        name: item.title,
+        poster: item.thumbnail,
+        description: "Watch on KissKH"
+    }));
+}
+
+// --- 2. STREAM HANDLER ---
 builder.defineStreamHandler(async (args) => {
     const streams = [];
     try {
@@ -88,12 +127,11 @@ builder.defineStreamHandler(async (args) => {
         const tmdbId = parts[1];
         const episode = parts[3] || 1;
 
-        // 1. Get Title from TMDB
         const type = args.type === 'series' ? 'tv' : 'movie';
         const metaRes = await axios.get(`https://api.themoviedb.org/3/${type}/${tmdbId}?api_key=${TMDB_KEY}`);
         const title = metaRes.data.name || metaRes.data.title;
 
-        // 2. Search KissKH (Proxied)
+        // Search KissKH (Proxied)
         const searchUrl = `https://kisskh.do/api/DramaList/Search?q=${encodeURIComponent(title)}&type=0`;
         const searchRes = await axios.get(getProxiedUrl(searchUrl));
 
@@ -116,9 +154,7 @@ builder.defineStreamHandler(async (args) => {
                 });
             }
         }
-    } catch (e) { 
-        console.error("Stream Error:", e.message); 
-    }
+    } catch (e) { console.error("Stream Error:", e.message); }
     return { streams };
 });
 
