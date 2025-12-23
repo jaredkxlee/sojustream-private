@@ -4,13 +4,14 @@ const axios = require('axios');
 
 // 🔒 CONFIGURATION
 const TMDB_KEY = "b80e5b1b965da72a2a23ba5680cb778a"; // Your Key
-const PROXY_URL = "https://jaredlkx-soju-tunnel.hf.space"; 
+// 🔥 UPDATED: Now pointing to your new Render Proxy
+const PROXY_URL = "https://soju-proxy.onrender.com"; 
 
 const builder = new addonBuilder({
-    id: "org.sojustream.jared.v17", 
-    version: "17.0.0",
-    name: "SojuStream (v17 Final)",
-    description: "KissKH via MediaFlow",
+    id: "org.sojustream.jared.v18", // Updated to v18 for tracking
+    version: "18.0.0",
+    name: "SojuStream (v18 Render Proxy)",
+    description: "KissKH via MediaFlow on Render",
     resources: ["catalog", "stream"], 
     types: ["series", "movie"],
     idPrefixes: ["tmdb:", "tt"],
@@ -45,7 +46,7 @@ function getProxiedUrl(targetUrl) {
 
     const params = new URLSearchParams();
     params.append("url", targetUrl);
-    // 🔥 FIX: Directly use the password string here
+    // 🔥 FIX: Directly use the password string here (Must match your Render Proxy ENV)
     params.append("api_password", "12345678"); 
     params.append("headers", JSON.stringify(headers));
 
@@ -54,7 +55,7 @@ function getProxiedUrl(targetUrl) {
 
 // --- 1. CATALOG HANDLER ---
 builder.defineCatalogHandler(async (args) => {
-    console.log(`[v17] Requesting ${args.id}`);
+    console.log(`[v18] Requesting ${args.id}`);
     const domain = "kisskh.do";
     const page = args.extra && args.extra.skip ? Math.floor(args.extra.skip / 20) + 1 : 1;
     let targetUrl = "";
@@ -80,7 +81,7 @@ builder.defineCatalogHandler(async (args) => {
     try {
         const proxiedUrl = getProxiedUrl(targetUrl);
         // Debug Log
-        console.log(`[v17] Connecting to Proxy...`);
+        console.log(`[v18] Connecting to Render Proxy...`);
         
         const response = await axios.get(proxiedUrl, { timeout: 15000 });
         const items = response.data.results || response.data;
@@ -89,16 +90,16 @@ builder.defineCatalogHandler(async (args) => {
             if (response.data.data && Array.isArray(response.data.data)) {
                  return { metas: mapItems(response.data.data) };
             }
-            console.error("[v17] Proxy returned invalid data structure:", JSON.stringify(response.data).substring(0, 100));
+            console.error("[v18] Proxy returned invalid data structure:", JSON.stringify(response.data).substring(0, 100));
             return { metas: [] };
         }
 
-        console.log(`[v17] Success! Found ${items.length} items.`);
+        console.log(`[v18] Success! Found ${items.length} items.`);
         return { metas: mapItems(items) };
 
     } catch (e) {
-        if (e.response) console.error(`[v17] Proxy Error ${e.response.status}:`, e.response.data);
-        else console.error("[v17] Connection Error:", e.message);
+        if (e.response) console.error(`[v18] Proxy Error ${e.response.status}:`, e.response.data);
+        else console.error("[v18] Connection Error:", e.message);
         return { metas: [] };
     }
 });
