@@ -4,11 +4,13 @@
   "description": "Private Stremio Addon",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "scrapers": "node scrapers.js"
   },
   "dependencies": {
     "@consumet/extensions": "^1.8.7",
     "axios": "^1.13.2",
+    "dotenv": "^17.2.3",
     "stremio-addon-sdk": "^1.6.10"
   }
 }
