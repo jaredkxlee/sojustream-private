@@ -3,14 +3,13 @@ const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 const axios = require('axios');
 
 // 🔒 FLARESOLVERR CONFIGURATION
-// Your Render Proxy URL
 const FLARESOLVERR_URL = "https://soju-proxy.onrender.com/v1"; 
 
 const builder = new addonBuilder({
-    id: "org.sojustream.jared.v21",
-    version: "21.0.0",
-    name: "SojuStream (FlareSolverr)",
-    description: "Bypasses Cloudflare using Real Browser",
+    id: "org.sojustream.jared.v22",
+    version: "22.0.0",
+    name: "SojuStream (Session Fix)",
+    description: "KissKH via FlareSolverr Sessions",
     resources: ["catalog", "stream"], 
     types: ["series", "movie"],
     idPrefixes: ["tmdb:", "tt"],
@@ -30,36 +29,42 @@ const builder = new addonBuilder({
     ]
 });
 
-// ✅ HELPER: Ask FlareSolverr to fetch the data
+// ✅ HELPER: INTELLIGENT FLARESOLVERR REQUEST
 async function fetchWithFlare(targetUrl) {
+    const sessionName = 'kisskh-browser'; // We will reuse this browser tab
+    
     try {
-        console.log(`[FlareSolverr] Command: GET ${targetUrl}`);
-        
+        console.log(`[FlareSolverr] Step 1: Ensuring Session '${sessionName}' exists...`);
+        // 1. Create Session (Initialize the browser)
+        // We ignore the error if it already exists
+        await axios.post(FLARESOLVERR_URL, {
+            cmd: 'sessions.create',
+            session: sessionName
+        }, { headers: { 'Content-Type': 'application/json' } }).catch(() => {});
+
+        console.log(`[FlareSolverr] Step 2: Requesting Data via Session...`);
+        // 2. Request using the persistent session
         const response = await axios.post(FLARESOLVERR_URL, {
             cmd: 'request.get',
             url: targetUrl,
-            maxTimeout: 60000, // Wait up to 60s for Cloudflare to solve
+            session: sessionName, // <--- THE MAGIC KEY
+            maxTimeout: 60000,    // Wait up to 60s
         }, {
             headers: { 'Content-Type': 'application/json' }
         });
 
-        // FlareSolverr returns the HTML/JSON in a special 'solution' object
         if (response.data.status === 'ok') {
-            // KissKH returns JSON, but FlareSolverr returns it as a string in 'response'
-            // We need to parse that string back into JSON
-            try {
-                // Sometimes it returns an HTML wrapper, we need to extract the JSON body
-                const rawText = response.data.solution.response;
-                // If it looks like JSON, parse it
-                if (rawText.trim().startsWith('{') || rawText.trim().startsWith('[')) {
-                    return JSON.parse(rawText);
-                } else {
-                    // It might be the HTML of the Cloudflare challenge if it failed
-                    console.error("[FlareSolverr] Returned HTML, not JSON. Challenge might have failed.");
-                    return null;
-                }
-            } catch (e) {
-                console.error("[FlareSolverr] Failed to parse JSON response:", e.message);
+            const rawText = response.data.solution.response;
+            // Clean up any HTML wrapper (sometimes FlareSolverr wraps JSON in <html><body>...</body></html>)
+            const jsonStart = rawText.indexOf('{');
+            const jsonEnd = rawText.lastIndexOf('}');
+            
+            if (jsonStart !== -1 && jsonEnd !== -1) {
+                const jsonString = rawText.substring(jsonStart, jsonEnd + 1);
+                return JSON.parse(jsonString);
+            } else {
+                console.error("[FlareSolverr] Still got HTML. Cloudflare is very angry.");
+                console.error("Preview:", rawText.substring(0, 100));
                 return null;
             }
         } else {
@@ -75,7 +80,7 @@ async function fetchWithFlare(targetUrl) {
 
 // --- 1. CATALOG HANDLER ---
 builder.defineCatalogHandler(async (args) => {
-    console.log(`[v21] Requesting ${args.id}`);
+    console.log(`[v22] Requesting ${args.id}`);
     const domain = "kisskh.do";
     const page = args.extra && args.extra.skip ? Math.floor(args.extra.skip / 20) + 1 : 1;
     let targetUrl = "";
@@ -99,10 +104,11 @@ builder.defineCatalogHandler(async (args) => {
     
     if (!data) return { metas: [] };
     
+    // KissKH sometimes wraps results in 'data', sometimes 'results'
     const items = data.results || data.data || data;
 
     if (Array.isArray(items)) {
-        console.log(`[v21] Success! Found ${items.length} items.`);
+        console.log(`[v22] Success! Found ${items.length} items.`);
         return { metas: mapItems(items) };
     }
     
@@ -122,19 +128,7 @@ function mapItems(items) {
 // --- 2. STREAM HANDLER ---
 builder.defineStreamHandler(async (args) => {
     const streams = [];
-    try {
-        const parts = args.id.split(":");
-        const tmdbId = parts[1];
-        const episode = parts[3] || 1;
-
-        // 1. Search KissKH (via FlareSolverr)
-        // Note: For simplicity, we assume we have the title. In prod, fetch TMDB first.
-        // For this snippet, let's assume we search by TMDB ID or just return empty if complex
-        // (You would paste the TMDB fetching logic here like previous versions)
-        
-        // ... (Logic is same as before, just use 'fetchWithFlare' instead of 'axios.get')
-        
-    } catch (e) { console.error("Stream Error:", e.message); }
+    // Stream logic temporarily simplified to focus on catalog fix first
     return { streams };
 });
 
