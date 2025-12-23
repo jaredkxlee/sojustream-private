@@ -1,5 +1,5 @@
-process.env.PROXY_PASS = "https://jaredlkx:12345678@jaredlkx-soju-tunnel.hf.space:443";
-require('dotenv').config();
+// 1. PASTE THIS LINE AT THE VERY TOP (Line 1):
+process.env.PROXY_PASS = "https://jaredlkx:12345678@jaredlkx-soju-tunnel.hf.space:443";require('dotenv').config();
 const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 const axios = require('axios');
 
