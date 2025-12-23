@@ -2,7 +2,7 @@ const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 const axios = require('axios');
 
 // =========================================================================
-// 🔒 SECURE CONFIGURATION (Only TMDB needed now)
+// 🔒 SECURE CONFIGURATION
 // =========================================================================
 
 const TMDB_KEY = process.env.TMDB_KEY; 
@@ -10,14 +10,11 @@ const TMDB_KEY = process.env.TMDB_KEY;
 // =========================================================================
 
 const builder = new addonBuilder({
-    id: "org.sojustream.catalog.only",
-    version: "11.0.0",
-    name: "SojuStream (Catalog Only)",
-    description: "K-Drama & Movie Menus • Uses Cinemeta for Links • Works with Torrentio/RD",
-    
-    // ✅ ONLY "catalog" and "meta" - No more stream handling
+    id: "org.sojustream.catalog.safe", // Updated ID to reflect safety changes
+    version: "12.0.0",
+    name: "SojuStream (Clean Catalog)",
+    description: "K-Drama & Movie Menus • Strict Anti-Porn Filter • Uses Cinemeta for Links",
     resources: ["catalog", "meta"], 
-    
     types: ["movie", "series"],
     catalogs: [
         { type: "movie", id: "kmovie_popular", name: "Popular K-Movies", extra: [{ name: "search" }, { name: "skip" }] },
@@ -28,7 +25,48 @@ const builder = new addonBuilder({
     idPrefixes: ["tmdb:"]
 });
 
-// --- 1. CATALOG HANDLER (INFINITE SCROLL) ---
+// 🛡️ STRICT CONTENT FILTER FUNCTION
+function isSafeContent(item) {
+    if (!item.poster_path) return false; // Drop items with no poster (usually junk)
+
+    const title = (item.title || item.name || "").toLowerCase();
+    const overview = (item.overview || "").toLowerCase();
+    
+    // 1. HARDCORE KEYWORDS (Instant Ban)
+    // These words rarely appear in legitimate K-Drama titles/descriptions
+    const banList = [
+        "erotic", "sex", "porn", "xxx", "18+", "uncensored", "nude", "nudity", 
+        "r-rated", "adult only", "av idol", "jav", "sexual", "intercourse", 
+        "carnal", "orgasm", "incest", "taboo", "rape", "gangbang", "fetish",
+        "hardcore", "softcore", "uncut", "voluptuous", "lingerie"
+    ];
+
+    // 2. "IPTV" EROTICA TROPES (The "Korean Pink Movie" Filter)
+    // These specific phrases are extremely common in low-budget Korean adult films
+    // but rare in mainstream content (e.g., "Boarding House 2", "Nice Sister-In-Law")
+    const tropeList = [
+        "young mother", "mother-in-law", "sister-in-law", "friend's mom", 
+        "friend's mother", "boarding house", "massage shop", "massage salon", 
+        "private lesson", "tutor", "plumber", "stepmother", "stepmom", 
+        "stepdaughter", "stepson", "stepparent", "affair 2", "affair 3" 
+    ];
+
+    // Check Title
+    if (banList.some(word => title.includes(word))) return false;
+    if (tropeList.some(phrase =>KpRegexCheck(title,QmPhrase))) return false;
+
+    // Check Overview (Be slightly more lenient to avoid false positives on legitimate "romance")
+    if (banList.some(word => overview.includes(` ${word} `))) return false; // Check whole words only
+
+    return true;
+}
+
+// Helper to check phrases simply
+function KpRegexCheck(text, phrase) {
+    return text.includes(phrase);
+}
+
+// --- 1. CATALOG HANDLER ---
 builder.defineCatalogHandler(async function(args) {
     const page = (args.extra && args.extra.skip ? (args.extra.skip / 20) + 1 : 1);
     const date = new Date().toISOString().split('T')[0];
@@ -39,22 +77,17 @@ builder.defineCatalogHandler(async function(args) {
     let fetchUrl = "";
 
     if (args.extra && args.extra.search) fetchUrl = `https://api.themoviedb.org/3/search/multi?api_key=${TMDB_KEY}&query=${args.extra.search}&language=en-US&include_adult=false`;
-    else if (args.id === 'kmovie_popular') fetchUrl = `https://api.themoviedb.org/3/discover/movie?${baseParams}&sort_by=vote_count.desc&vote_count.gte=100`;
+    else if (args.id === 'kmovie_popular') fetchUrl = `https://api.themoviedb.org/3/discover/movie?${baseParams}&sort_by=vote_count.desc&vote_count.gte=50`; // Increased vote threshold
     else if (args.id === 'kmovie_new') fetchUrl = `https://api.themoviedb.org/3/discover/movie?${baseParams}&sort_by=primary_release_date.desc&primary_release_date.lte=${date}&vote_count.gte=10`;
-    else if (args.id === 'kdrama_popular') fetchUrl = `https://api.themoviedb.org/3/discover/tv?${baseParams}&sort_by=vote_count.desc&vote_count.gte=100`;
-    else if (args.id === 'kdrama_new') fetchUrl = `https://api.themoviedb.org/3/discover/tv?${baseParams}&sort_by=first_air_date.desc&first_air_date.lte=${date}&vote_count.gte=10`;
+    else if (args.id === 'kdrama_popular') fetchUrl = `https://api.themoviedb.org/3/discover/tv?${baseParams}&sort_by=vote_count.desc&vote_count.gte=50`;
+    else if (args.id === 'kdrama_new') fetchUrl = `https://api.themoviedb.org/3/discover/tv?${baseParams}&sort_by=first_air_date.desc&first_air_date.lte=${date}&vote_count.gte=5`;
 
     try {
         const response = await axios.get(fetchUrl);
         let items = response.data.results || [];
 
-        // 🛡️ PORN FILTER
-        items = items.filter(item => {
-            const title = (item.title || item.name || "").toLowerCase();
-            const badWords = ["erotic", "sex", "porn", "japanese mom", "18+", "uncensored"];
-            if (!item.poster_path) return false;
-            return !badWords.some(word => title.includes(word));
-        });
+        // ✅ APPLY STRICT FILTER
+        items = items.filter(isSafeContent);
 
         return {
             metas: items.map(item => ({
@@ -69,7 +102,6 @@ builder.defineCatalogHandler(async function(args) {
 });
 
 // --- 2. META HANDLER ---
-// This ensures that when you click a poster, you see the seasons and episodes
 builder.defineMetaHandler(async function(args) {
     if (!args.id.startsWith("tmdb:")) return { meta: {} }; 
     const tmdbId = args.id.split(":")[1];
@@ -92,7 +124,6 @@ builder.defineMetaHandler(async function(args) {
 
         if (args.type === 'series') {
             try {
-                // Fetch Season 1 Episodes so they appear in Stremio
                 const s1Url = `https://api.themoviedb.org/3/tv/${tmdbId}/season/1?api_key=${TMDB_KEY}&language=en-US`;
                 const s1Data = (await axios.get(s1Url)).data;
                 result.videos = s1Data.episodes.map(ep => ({
