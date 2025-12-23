@@ -7,7 +7,7 @@ const axios = require('axios');
 const TMDB_KEY = process.env.TMDB_KEY;
 const PROXY_URL = "https://jaredlkx-soju-tunnel.hf.space"; 
 // 🛡️ AUTO-FIX: Trims hidden spaces from the password
-constRPXY_PASS = (process.env.PROXY_PASS || "").trim();
+const proxy = "https://jaredlkx:12345678@jaredlkx-soju-tunnel.hf.space:443";
 
 const builder = new addonBuilder({
     id: "org.sojustream.jared.v16", // 👈 Version 16 (Check for this in logs!)
