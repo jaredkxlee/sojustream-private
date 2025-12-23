@@ -1,18 +1,15 @@
-// 1. PASTE THIS LINE AT THE VERY TOP (Line 1):
-process.env.PROXY_PASS = "https://jaredlkx:12345678@jaredlkx-soju-tunnel.hf.space:443";require('dotenv').config();
+require('dotenv').config();
 const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 const axios = require('axios');
 
 // 🔒 CONFIGURATION
-const TMDB_KEY = process.env.TMDB_KEY;
+const TMDB_KEY = "b80e5b1b965da72a2a23ba5680cb778a"; // Your Key
 const PROXY_URL = "https://jaredlkx-soju-tunnel.hf.space"; 
-// 🛡️ AUTO-FIX: Trims hidden spaces from the password
-const proxy = "https://jaredlkx:12345678@jaredlkx-soju-tunnel.hf.space:443";
 
 const builder = new addonBuilder({
-    id: "org.sojustream.jared.v16", // 👈 Version 16 (Check for this in logs!)
-    version: "16.0.0",
-    name: "SojuStream (v16 Fix)",
+    id: "org.sojustream.jared.v17", 
+    version: "17.0.0",
+    name: "SojuStream (v17 Final)",
     description: "KissKH via MediaFlow",
     resources: ["catalog", "stream"], 
     types: ["series", "movie"],
@@ -39,7 +36,7 @@ const builder = new addonBuilder({
     ]
 });
 
-// ✅ HELPER: SAFE URL BUILDER (Fixes 422 Errors)
+// ✅ HELPER: SAFE URL BUILDER
 function getProxiedUrl(targetUrl) {
     const headers = { 
         "Referer": "https://kisskh.do/",
@@ -48,7 +45,8 @@ function getProxiedUrl(targetUrl) {
 
     const params = new URLSearchParams();
     params.append("url", targetUrl);
-    params.append("api_password", PROXY_PASS || ""); // Uses your 12345678 password
+    // 🔥 FIX: Directly use the password string here
+    params.append("api_password", "12345678"); 
     params.append("headers", JSON.stringify(headers));
 
     return `${PROXY_URL}/proxy/stream?${params.toString()}`;
@@ -56,9 +54,10 @@ function getProxiedUrl(targetUrl) {
 
 // --- 1. CATALOG HANDLER ---
 builder.defineCatalogHandler(async (args) => {
-    console.log(`[v16] Requesting ${args.id}`); // 👈 LOOK FOR [v16] IN LOGS
+    console.log(`[v17] Requesting ${args.id}`);
     const domain = "kisskh.do";
     const page = args.extra && args.extra.skip ? Math.floor(args.extra.skip / 20) + 1 : 1;
+    let targetUrl = "";
     
     if (args.extra && args.extra.search) {
         targetUrl = `https://${domain}/api/DramaList/Search?q=${encodeURIComponent(args.extra.search)}&type=0`;
@@ -81,26 +80,25 @@ builder.defineCatalogHandler(async (args) => {
     try {
         const proxiedUrl = getProxiedUrl(targetUrl);
         // Debug Log
-        console.log(`[v16] Connecting to Proxy... (Pass len: ${PROXY_PASS.length})`);
+        console.log(`[v17] Connecting to Proxy...`);
         
         const response = await axios.get(proxiedUrl, { timeout: 15000 });
         const items = response.data.results || response.data;
 
         if (!Array.isArray(items)) {
-            // Handle "MostSearch" or wrapped data formats
             if (response.data.data && Array.isArray(response.data.data)) {
                  return { metas: mapItems(response.data.data) };
             }
-            console.error("[v16] Proxy returned invalid data structure:", JSON.stringify(response.data).substring(0, 100));
+            console.error("[v17] Proxy returned invalid data structure:", JSON.stringify(response.data).substring(0, 100));
             return { metas: [] };
         }
 
-        console.log(`[v16] Success! Found ${items.length} items.`);
+        console.log(`[v17] Success! Found ${items.length} items.`);
         return { metas: mapItems(items) };
 
     } catch (e) {
-        if (e.response) console.error(`[v16] Proxy Error ${e.response.status}:`, e.response.data);
-        else console.error("[v16] Connection Error:", e.message);
+        if (e.response) console.error(`[v17] Proxy Error ${e.response.status}:`, e.response.data);
+        else console.error("[v17] Connection Error:", e.message);
         return { metas: [] };
     }
 });
