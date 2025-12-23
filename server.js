@@ -1,4 +1,4 @@
-cconst { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
+const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 const { MOVIES } = require("@consumet/extensions");
 const axios = require('axios');
 
