@@ -1,19 +1,15 @@
+require('dotenv').config();
 const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 const axios = require('axios');
 
-// =========================================================================
-// 🔒 SECURE CONFIGURATION
-// =========================================================================
-
-const TMDB_KEY = process.env.TMDB_KEY; 
-
-// =========================================================================
+// 🔒 CONFIGURATION
+const TMDB_KEY = process.env.TMDB_KEY;
 
 const builder = new addonBuilder({
-    id: "org.sojustream.catalog.safe", // Updated ID to reflect safety changes
-    version: "12.0.0",
+    id: "org.sojustream.catalog.safe", 
+    version: "12.0.1", // 👈 Bumped version
     name: "SojuStream (Clean Catalog)",
-    description: "K-Drama & Movie Menus • Strict Anti-Porn Filter • Uses Cinemeta for Links",
+    description: "K-Drama & Movie Menus • Anti-Porn Filter • Uses Cinemeta for Links",
     resources: ["catalog", "meta"], 
     types: ["movie", "series"],
     catalogs: [
@@ -25,15 +21,14 @@ const builder = new addonBuilder({
     idPrefixes: ["tmdb:"]
 });
 
-// 🛡️ STRICT CONTENT FILTER FUNCTION
+// 🛡️ STRICT CONTENT FILTER
 function isSafeContent(item) {
-    if (!item.poster_path) return false; // Drop items with no poster (usually junk)
+    if (!item.poster_path) return false; // Filter out broken metadata
 
     const title = (item.title || item.name || "").toLowerCase();
     const overview = (item.overview || "").toLowerCase();
     
-    // 1. HARDCORE KEYWORDS (Instant Ban)
-    // These words rarely appear in legitimate K-Drama titles/descriptions
+    // 1. HARDCORE KEYWORDS
     const banList = [
         "erotic", "sex", "porn", "xxx", "18+", "uncensored", "nude", "nudity", 
         "r-rated", "adult only", "av idol", "jav", "sexual", "intercourse", 
@@ -41,9 +36,7 @@ function isSafeContent(item) {
         "hardcore", "softcore", "uncut", "voluptuous", "lingerie"
     ];
 
-    // 2. "IPTV" EROTICA TROPES (The "Korean Pink Movie" Filter)
-    // These specific phrases are extremely common in low-budget Korean adult films
-    // but rare in mainstream content (e.g., "Boarding House 2", "Nice Sister-In-Law")
+    // 2. EROTICA TROPES (The "Korean Pink Movie" Filter)
     const tropeList = [
         "young mother", "mother-in-law", "sister-in-law", "friend's mom", 
         "friend's mother", "boarding house", "massage shop", "massage salon", 
@@ -53,22 +46,17 @@ function isSafeContent(item) {
 
     // Check Title
     if (banList.some(word => title.includes(word))) return false;
-    if (tropeList.some(phrase =>KpRegexCheck(title,QmPhrase))) return false;
+    if (tropeList.some(phrase => title.includes(phrase))) return false; // 👈 Fixed typo here
 
-    // Check Overview (Be slightly more lenient to avoid false positives on legitimate "romance")
-    if (banList.some(word => overview.includes(` ${word} `))) return false; // Check whole words only
+    // Check Overview (Whole words only to avoid false positives)
+    if (banList.some(word => overview.includes(` ${word} `))) return false;
 
     return true;
 }
 
-// Helper to check phrases simply
-function KpRegexCheck(text, phrase) {
-    return text.includes(phrase);
-}
-
 // --- 1. CATALOG HANDLER ---
 builder.defineCatalogHandler(async function(args) {
-    const page = (args.extra && args.extra.skip ? (args.extra.skip / 20) + 1 : 1);
+    const page = (args.extra && args.extra.skip ? Math.floor(args.extra.skip / 20) + 1 : 1);
     const date = new Date().toISOString().split('T')[0];
     
     if (!TMDB_KEY) return { metas: [] };
@@ -76,29 +64,38 @@ builder.defineCatalogHandler(async function(args) {
     const baseParams = `api_key=${TMDB_KEY}&language=en-US&include_adult=false&with_original_language=ko&page=${page}`;
     let fetchUrl = "";
 
-    if (args.extra && args.extra.search) fetchUrl = `https://api.themoviedb.org/3/search/multi?api_key=${TMDB_KEY}&query=${args.extra.search}&language=en-US&include_adult=false`;
-    else if (args.id === 'kmovie_popular') fetchUrl = `https://api.themoviedb.org/3/discover/movie?${baseParams}&sort_by=vote_count.desc&vote_count.gte=50`; // Increased vote threshold
-    else if (args.id === 'kmovie_new') fetchUrl = `https://api.themoviedb.org/3/discover/movie?${baseParams}&sort_by=primary_release_date.desc&primary_release_date.lte=${date}&vote_count.gte=10`;
-    else if (args.id === 'kdrama_popular') fetchUrl = `https://api.themoviedb.org/3/discover/tv?${baseParams}&sort_by=vote_count.desc&vote_count.gte=50`;
-    else if (args.id === 'kdrama_new') fetchUrl = `https://api.themoviedb.org/3/discover/tv?${baseParams}&sort_by=first_air_date.desc&first_air_date.lte=${date}&vote_count.gte=5`;
+    if (args.extra && args.extra.search) {
+        fetchUrl = `https://api.themoviedb.org/3/search/multi?api_key=${TMDB_KEY}&query=${encodeURIComponent(args.extra.search)}&language=en-US&include_adult=false`;
+    } else if (args.id === 'kmovie_popular') {
+        fetchUrl = `https://api.themoviedb.org/3/discover/movie?${baseParams}&sort_by=vote_count.desc&vote_count.gte=50`;
+    } else if (args.id === 'kmovie_new') {
+        fetchUrl = `https://api.themoviedb.org/3/discover/movie?${baseParams}&sort_by=primary_release_date.desc&primary_release_date.lte=${date}&vote_count.gte=10`;
+    } else if (args.id === 'kdrama_popular') {
+        fetchUrl = `https://api.themoviedb.org/3/discover/tv?${baseParams}&sort_by=vote_count.desc&vote_count.gte=50`;
+    } else if (args.id === 'kdrama_new') {
+        fetchUrl = `https://api.themoviedb.org/3/discover/tv?${baseParams}&sort_by=first_air_date.desc&first_air_date.lte=${date}&vote_count.gte=5`;
+    }
 
     try {
         const response = await axios.get(fetchUrl);
         let items = response.data.results || [];
 
-        // ✅ APPLY STRICT FILTER
-        items = items.filter(isSafeContent);
-
+        // ✅ APPLY FIX
+        const safeItems = items.filter(isSafeContent);
+        
         return {
-            metas: items.map(item => ({
+            metas: safeItems.map(item => ({
                 id: `tmdb:${item.id}`,
                 type: item.media_type === 'movie' || args.type === 'movie' ? 'movie' : 'series',
                 name: item.title || item.name,
-                poster: `https://image.tmdb.org/t/p/w500${item.poster_path}`,
+                poster: item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : null,
                 description: item.overview
             }))
         };
-    } catch (e) { return { metas: [] }; }
+    } catch (e) {
+        console.error("Server Catalog Error:", e.message);
+        return { metas: [] }; 
+    }
 });
 
 // --- 2. META HANDLER ---
