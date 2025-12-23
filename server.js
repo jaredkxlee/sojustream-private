@@ -13,13 +13,13 @@ const RD_TOKEN = 'VNED7ID5VRKYQJY7ICAX32N6MSPAJ3OO7REGYZ5NGVWZL7NJ2MCQ';
 // ⬆️ ⬆️ ⬆️  END CONFIGURATION  ⬆️ ⬆️ ⬆️
 // =========================================================================
 
-// WE USE FLIXHQ (It is the only stable provider that doesn't crash)
+// FLIXHQ: The stable engine
 const provider = new MOVIES.FlixHQ(); 
 
 const builder = new addonBuilder({
-    id: "org.community.sojustream.stable",
-    version: "5.0.0",
-    name: "SojuStream (Stable)",
+    id: "org.community.sojustream.fixed52",
+    version: "5.2.0",
+    name: "SojuStream (Fixed)",
     description: "K-Content • FlixHQ • No Porn • English",
     resources: ["catalog", "meta", "stream"], 
     types: ["movie", "series"],
@@ -32,13 +32,12 @@ const builder = new addonBuilder({
     idPrefixes: ["tmdb:"]
 });
 
-// --- 1. CATALOG HANDLER (WITH SAFETY FILTER) ---
+// --- 1. CATALOG HANDLER (SAFE & CLEAN) ---
 builder.defineCatalogHandler(async function(args) {
     const page = (args.extra && args.extra.skip ? (args.extra.skip / 20) + 1 : 1);
     const date = new Date().toISOString().split('T')[0];
     let fetchUrl = '';
 
-    // 🔒 SAFETY LOCK: Force English & No Porn
     const baseParams = `api_key=${TMDB_KEY}&language=en-US&include_adult=false&with_original_language=ko&page=${page}`;
 
     if (args.extra && args.extra.search) {
@@ -53,7 +52,7 @@ builder.defineCatalogHandler(async function(args) {
         const response = await axios.get(fetchUrl);
         let items = response.data.results || [];
 
-        // 🛡️ MANUAL FILTER (Blocks "Japanese Mom" etc.)
+        // 🛡️ MANUAL FILTER
         items = items.filter(item => {
             const title = (item.title || item.name || "").toLowerCase();
             const badWords = ["erotic", "sex", "porn", "japanese mom", "18+", "uncensored"];
@@ -74,14 +73,15 @@ builder.defineCatalogHandler(async function(args) {
     } catch (e) { return { metas: [] }; }
 });
 
-// --- 2. META HANDLER (THE FIX FOR "CONTENT NOT FOUND") ---
+// --- 2. META HANDLER (REWRITTEN: Fixes "Content Not Found") ---
 builder.defineMetaHandler(async function(args) {
     if (!args.id.startsWith("tmdb:")) return { meta: {} };
     const tmdbId = args.id.split(":")[1];
-    const type = args.type === 'movie' ? 'movie' : 'tv';
+    
+    // Auto-detect type if possible, or fallback
+    const type = args.type === 'series' ? 'tv' : 'movie';
 
     try {
-        // We fetch details from TMDB so Stremio knows what to display when you click
         const url = `https://api.themoviedb.org/3/${type}/${tmdbId}?api_key=${TMDB_KEY}&language=en-US`;
         const meta = (await axios.get(url)).data;
 
@@ -94,12 +94,18 @@ builder.defineMetaHandler(async function(args) {
                 background: meta.backdrop_path ? `https://image.tmdb.org/t/p/original${meta.backdrop_path}` : null,
                 description: meta.overview,
                 releaseInfo: (meta.release_date || meta.first_air_date || "").substring(0, 4),
+                // IMPORTANT: For series, we provide empty videos so Stremio doesn't crash
+                // For movies, we provide one streamable object
+                videos: args.type === 'movie' ? [{ id: args.id, title: "Watch Movie", streams: [] }] : []
             }
         };
-    } catch (e) { return { meta: {} }; }
+    } catch (e) { 
+        console.log("Meta Error:", e.message);
+        return { meta: {} }; 
+    }
 });
 
-// --- 3. STREAM HANDLER ---
+// --- 3. STREAM HANDLER (IMPROVED: Fuzzy Search) ---
 builder.defineStreamHandler(async function(args) {
     if (!args.id.startsWith("tmdb:")) return { streams: [] };
     const tmdbId = args.id.split(":")[1];
@@ -115,11 +121,15 @@ builder.defineStreamHandler(async function(args) {
     const streams = [];
 
     try {
-        const search = await provider.search(title);
+        // CLEAN TITLE: Remove special chars like ":" or "-" to help search
+        const cleanTitle = title.replace(/[^a-zA-Z0-9 ]/g, " "); 
+        const search = await provider.search(cleanTitle);
+        
         if (search.results.length > 0) {
             const match = search.results[0];
             const info = await provider.fetchMediaInfo(match.id);
             
+            // Get Episode ID
             let epId = (info.episodes && info.episodes.length > 0) ? info.episodes[0].id : match.id;
             
             if (epId) {
