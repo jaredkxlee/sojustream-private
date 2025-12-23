@@ -8,9 +8,9 @@ const PROXY_URL = "https://jaredlkx-soju-tunnel.hf.space";
 const PROXY_PASS = process.env.PROXY_PASS; 
 
 const builder = new addonBuilder({
-    id: "org.sojustream.jared.v12.fix2", // 👈 New ID to force refresh
-    version: "12.0.3",
-    name: "SojuStream (Fixed Password)",
+    id: "org.sojustream.jared.v13", // 👈 New ID for the final fix
+    version: "13.0.0",
+    name: "SojuStream (Simple Auth)",
     description: "KissKH via MediaFlow",
     resources: ["catalog", "stream"], 
     types: ["series", "movie"],
@@ -37,19 +37,21 @@ const builder = new addonBuilder({
     ]
 });
 
-// ✅ HELPER: THIS IS WHERE THE FIX IS
+// ✅ HELPER: THE "BXULLETPROOF" URL BUILDER
 function getProxiedUrl(targetUrl) {
-    const headers = JSON.stringify({ 
+    // 1. Define Headers
+    const headers = { 
         "Referer": "https://kisskh.do/",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    });
+    };
 
-    // 🔴 THE FIX: encodeURIComponent wraps special symbols like '@'
-    const safeUrl = encodeURIComponent(targetUrl);
-    const safePass = encodeURIComponent(PROXY_PASS); // 👈 Fixes 'soju@123'
-    const safeHeaders = encodeURIComponent(headers);
+    // 2. Use URLSearchParams (Handles ALL symbols automatically)
+    const params = new URLSearchParams();
+    params.append("url", targetUrl);
+    params.append("api_password", PROXY_PASS); // Works safely with any password now
+    params.append("headers", JSON.stringify(headers));
 
-    return `${PROXY_URL}/proxy/stream?url=${safeUrl}&api_password=${safePass}&headers=${safeHeaders}`;
+    return `${PROXY_URL}/proxy/stream?${params.toString()}`;
 }
 
 // --- 1. CATALOG HANDLER ---
@@ -78,11 +80,12 @@ builder.defineCatalogHandler(async (args) => {
 
     try {
         const proxiedUrl = getProxiedUrl(targetUrl);
-        const response = await axios.get(proxiedUrl, { timeout: 10000 });
+        const response = await axios.get(proxiedUrl, { timeout: 15000 }); // Increased timeout to 15s
+        
+        // Validation: Ensure we got a real list back
         const items = response.data.results || response.data;
-
         if (!Array.isArray(items)) {
-            console.error("[Catalog] Proxy returned invalid data:", response.data);
+            console.error("[Catalog] Proxy returned invalid data structure");
             return { metas: [] };
         }
 
@@ -97,9 +100,9 @@ builder.defineCatalogHandler(async (args) => {
         };
 
     } catch (e) {
-        // Log the exact error for debugging
         if (e.response) {
-            console.error(`[Catalog] Error ${e.response.status}: ${e.response.statusText}`);
+            // Logs exactly why the proxy rejected it (403, 422, 500)
+            console.error(`[Catalog] Error ${e.response.status}:`, JSON.stringify(e.response.data));
         } else {
             console.error("[Catalog] Connection Error:", e.message);
         }
@@ -133,10 +136,9 @@ builder.defineStreamHandler(async (args) => {
             if (targetEp) {
                 const videoApiUrl = `https://kisskh.do/api/ExternalLoader/VideoService/${targetEp.id}?device=2`;
                 const videoRes = await axios.get(getProxiedUrl(videoApiUrl));
-                constPkStreamUrl = videoRes.data.Video;
-
-                // Ensure the final stream link also uses the encoded password
-                const finalUrl = getProxiedUrl(constPkStreamUrl);
+                
+                // Get the final stream URL from the proxy response
+                const finalUrl = getProxiedUrl(videoRes.data.Video);
                 
                 streams.push({
                     name: "⚡ Soju-Proxy",
