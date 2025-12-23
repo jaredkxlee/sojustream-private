@@ -6,8 +6,9 @@ const axios = require('axios');
 // ⬇️ ⬇️ ⬇️  USER CONFIGURATION  ⬇️ ⬇️ ⬇️
 // =========================================================================
 
-const TMDB_KEY = 'b80e5b1b965da72a2a23ba5680cb778a'; 
-const RD_TOKEN = 'VNED7ID5VRKYQJY7ICAX32N6MSPAJ3OO7REGYZ5NGVWZL7NJ2MCQ';     
+// 🔒 SECURITY UPDATE: Use process.env to hide keys
+const TMDB_KEY = process.env.TMDB_KEY; 
+const RD_TOKEN = process.env.RD_TOKEN;     
 
 // =========================================================================
 // ⬆️ ⬆️ ⬆️  END CONFIGURATION  ⬆️ ⬆️ ⬆️
@@ -15,7 +16,7 @@ const RD_TOKEN = 'VNED7ID5VRKYQJY7ICAX32N6MSPAJ3OO7REGYZ5NGVWZL7NJ2MCQ';
 
 // FLIXHQ: The stable engine
 const provider = new MOVIES.FlixHQ(); 
-
+// ... rest of the code stays the same ...
 const builder = new addonBuilder({
     id: "org.community.sojustream.fixed52",
     version: "5.2.0",
