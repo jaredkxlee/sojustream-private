@@ -263,8 +263,6 @@ builder.defineStreamHandler(async (args) => {
     }
 });
 
-<<<<<<< HEAD
+
 serveHTTP(builder.getInterface(), { port: process.env.PORT || 10000, host: "0.0.0.0" });
-=======
-serveHTTP(builder.getInterface(), { port: process.env.PORT || 10000, host: "0.0.0.0" });
->>>>>>> 689d87ce35c9569fbe4825c1b574d2ddeb294ebf
+
