@@ -12,7 +12,7 @@ const RD_TOKEN = process.env.RD_TOKEN;
 
 const builder = new addonBuilder({
     id: "org.sojustream.debridonly",
-    version: "10.0.0",
+    version: "10.0.1",
     name: "SojuStream (Platinum)",
     description: "K-Content • YTS + Nyaa • Real-Debrid • 100% Reliable",
     resources: ["catalog", "meta", "stream"], 
@@ -153,4 +153,43 @@ builder.defineStreamHandler(async function(args) {
 
             for (const q of queries) {
                 // Read Nyaa RSS Feed directly (No scraping, no blocking)
-                const nyaaUrl = `https://nyaa.si/?page=rss&q=${encodeURIComponent(q)}&c=0_0&f=
+                const nyaaUrl = `https://nyaa.si/?page=rss&q=${encodeURIComponent(q)}&c=0_0&f=0`;
+                const rss = (await axios.get(nyaaUrl)).data;
+                
+                // Extract Magnets
+                const magnets = [...rss.matchAll(/<link>(magnet:.*?)<\/link>/g)];
+                
+                if (magnets.length > 0) {
+                    const magnet = magnets[0][1].replace(/&amp;/g, '&').replace(/<!\[CDATA\[/g, '').replace(/\]\]>/g, '');
+                    const rdUrl = await resolveMagnet(magnet);
+                    if (rdUrl) {
+                        streams.push({ title: `🚀 RD [Nyaa] - ${q}`, url: rdUrl });
+                        break; // Stop if we found a working link
+                    }
+                }
+            }
+        } catch (e) { console.log("Nyaa Error:", e.message); }
+    }
+
+    return { streams: streams };
+});
+
+// --- HELPER: Real-Debrid Unrestrict ---
+async function resolveMagnet(magnet) {
+    try {
+        const headers = { 'Authorization': `Bearer ${RD_TOKEN}` };
+        // 1. Add Magnet
+        const add = await axios.post('https://api.real-debrid.com/rest/1.0/torrents/addMagnet', `magnet=${encodeURIComponent(magnet)}`, { headers });
+        // 2. Select All Files
+        await axios.post(`https://api.real-debrid.com/rest/1.0/torrents/selectFiles/${add.data.id}`, 'files=all', { headers });
+        // 3. Get Link Info
+        const info = await axios.get(`https://api.real-debrid.com/rest/1.0/torrents/info/${add.data.id}`, { headers });
+        // 4. Unrestrict First Link
+        if (info.data.links && info.data.links.length > 0) {
+            const unres = await axios.post('https://api.real-debrid.com/rest/1.0/unrestrict/link', `link=${info.data.links[0]}`, { headers });
+            return unres.data.download;
+        }
+    } catch (e) { return null; }
+}
+
+serveHTTP(builder.getInterface(), { port: process.env.PORT || 7000 });
