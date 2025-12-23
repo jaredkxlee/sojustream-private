@@ -4,13 +4,13 @@ const axios = require('axios');
 
 // 🔒 CONFIGURATION
 const TMDB_KEY = process.env.TMDB_KEY;
-const PROXY_URL = "https://jaredlkx-soju-tunnel.hf.space"; // Your Correct Proxy URL
-const PROXY_PASS = process.env.PROXY_PASS; // Ensure this matches your Space secrets
+const PROXY_URL = "https://jaredlkx-soju-tunnel.hf.space"; 
+const PROXY_PASS = process.env.PROXY_PASS; 
 
 const builder = new addonBuilder({
-    id: "org.sojustream.jared.v12", // 👈 CHANGED ID (Mandatory for refresh)
-    version: "12.0.0",
-    name: "SojuStream (Final Proxy)",
+    id: "org.sojustream.jared.v12.fix2", // 👈 New ID to force refresh
+    version: "12.0.3",
+    name: "SojuStream (Fixed Password)",
     description: "KissKH via MediaFlow",
     resources: ["catalog", "stream"], 
     types: ["series", "movie"],
@@ -37,13 +37,19 @@ const builder = new addonBuilder({
     ]
 });
 
-// Helper: Wrap URL in MediaFlow Proxy
+// ✅ HELPER: THIS IS WHERE THE FIX IS
 function getProxiedUrl(targetUrl) {
     const headers = JSON.stringify({ 
         "Referer": "https://kisskh.do/",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     });
-    return `${PROXY_URL}/proxy/stream?url=${encodeURIComponent(targetUrl)}&api_password=${PROXY_PASS}&headers=${encodeURIComponent(headers)}`;
+
+    // 🔴 THE FIX: encodeURIComponent wraps special symbols like '@'
+    const safeUrl = encodeURIComponent(targetUrl);
+    const safePass = encodeURIComponent(PROXY_PASS); // 👈 Fixes 'soju@123'
+    const safeHeaders = encodeURIComponent(headers);
+
+    return `${PROXY_URL}/proxy/stream?url=${safeUrl}&api_password=${safePass}&headers=${safeHeaders}`;
 }
 
 // --- 1. CATALOG HANDLER ---
@@ -52,7 +58,6 @@ builder.defineCatalogHandler(async (args) => {
     const domain = "kisskh.do";
     let targetUrl = "";
     
-    // ✅ 1. Map IDs to YOUR provided APIs
     if (args.extra && args.extra.search) {
         targetUrl = `https://${domain}/api/DramaList/Search?q=${encodeURIComponent(args.extra.search)}&type=0`;
     } else {
@@ -61,7 +66,6 @@ builder.defineCatalogHandler(async (args) => {
                 targetUrl = `https://${domain}/api/DramaList/List?page=1&type=0&sub=0&country=0&status=0&order=2`;
                 break;
             case "top_kdrama":
-                // Using 'order=1' for Top Rated based on your previous logs
                 targetUrl = `https://${domain}/api/DramaList/List?page=1&type=0&sub=0&country=2&status=0&order=1`;
                 break;
             case "upcoming_drama":
@@ -73,44 +77,32 @@ builder.defineCatalogHandler(async (args) => {
     }
 
     try {
-        // ✅ 2. Try fetching via Proxy first
-        console.log(`[Catalog] Fetching via Proxy: ${targetUrl}`);
         const proxiedUrl = getProxiedUrl(targetUrl);
-        let response = await axios.get(proxiedUrl, { timeout: 8000 }); // 8s timeout
-        
-        // If proxy returns junk, try direct (fallback)
-        if (!response.data || (!response.data.results && !Array.isArray(response.data))) {
-            console.log("[Catalog] Proxy failed/empty. Trying Direct...");
-            response = await axios.get(targetUrl, { 
-                headers: { 
-                    "Referer": "https://kisskh.do/",
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-                },
-                timeout: 5000
-            });
-        }
-
+        const response = await axios.get(proxiedUrl, { timeout: 10000 });
         const items = response.data.results || response.data;
 
         if (!Array.isArray(items)) {
-            console.error("[Catalog] Final Result is not an array:", response.data);
+            console.error("[Catalog] Proxy returned invalid data:", response.data);
             return { metas: [] };
         }
 
-        // ✅ 3. Map to Stremio Format
-        const metas = items.map(item => ({
-            id: `tmdb:${item.id}`,
-            type: "series",
-            name: item.title,
-            poster: item.thumbnail,
-            description: "Watch on KissKH"
-        }));
-
-        console.log(`[Catalog] Returning ${metas.length} items`);
-        return { metas };
+        return {
+            metas: items.map(item => ({
+                id: `tmdb:${item.id}`,
+                type: "series",
+                name: item.title,
+                poster: item.thumbnail,
+                description: "Watch on KissKH"
+            }))
+        };
 
     } catch (e) {
-        console.error("[Catalog] Error:", e.message);
+        // Log the exact error for debugging
+        if (e.response) {
+            console.error(`[Catalog] Error ${e.response.status}: ${e.response.statusText}`);
+        } else {
+            console.error("[Catalog] Connection Error:", e.message);
+        }
         return { metas: [] };
     }
 });
@@ -123,30 +115,28 @@ builder.defineStreamHandler(async (args) => {
         const tmdbId = parts[1];
         const episode = parts[3] || 1;
 
-        // 1. Get Title from TMDB
         const type = args.type === 'series' ? 'tv' : 'movie';
         const metaRes = await axios.get(`https://api.themoviedb.org/3/${type}/${tmdbId}?api_key=${TMDB_KEY}`);
         const title = metaRes.data.name || metaRes.data.title;
 
-        // 2. Search KissKH (Proxied)
+        // Search KissKH (Proxied)
         const searchUrl = `https://kisskh.do/api/DramaList/Search?q=${encodeURIComponent(title)}&type=0`;
         const searchRes = await axios.get(getProxiedUrl(searchUrl));
 
         if (searchRes.data && searchRes.data[0]) {
             const drama = searchRes.data[0];
-            // 3. Get Episode List (Proxied)
             const detailUrl = `https://kisskh.do/api/DramaList/Drama/${drama.id}?isMovie=${args.type === 'movie'}`;
             const detailRes = await axios.get(getProxiedUrl(detailUrl));
             
             const targetEp = (detailRes.data.episodes || []).find(e => e.number == episode);
             
             if (targetEp) {
-                // 4. Get Video Link (Proxied)
                 const videoApiUrl = `https://kisskh.do/api/ExternalLoader/VideoService/${targetEp.id}?device=2`;
                 const videoRes = await axios.get(getProxiedUrl(videoApiUrl));
-                
-                // 5. Return MediaFlow Stream URL
-                const finalUrl = getProxiedUrl(videoRes.data.Video);
+                constPkStreamUrl = videoRes.data.Video;
+
+                // Ensure the final stream link also uses the encoded password
+                const finalUrl = getProxiedUrl(constPkStreamUrl);
                 
                 streams.push({
                     name: "⚡ Soju-Proxy",
