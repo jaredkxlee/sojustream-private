@@ -11,10 +11,10 @@ const RD_TOKEN = process.env.RD_TOKEN;
 // =========================================================================
 
 const builder = new addonBuilder({
-    id: "org.sojustream.debridonly",
-    version: "10.0.1",
+    id: "org.sojustream.platinum",
+    version: "10.1.0",
     name: "SojuStream (Platinum)",
-    description: "K-Content • YTS + Nyaa • Real-Debrid • 100% Reliable",
+    description: "K-Content • YTS + Nyaa (Movies & Series) • Real-Debrid",
     resources: ["catalog", "meta", "stream"], 
     types: ["movie", "series"],
     catalogs: [
@@ -26,16 +26,12 @@ const builder = new addonBuilder({
     idPrefixes: ["tmdb:"]
 });
 
-// --- 1. CATALOG HANDLER (Uses TMDB) ---
+// --- 1. CATALOG HANDLER ---
 builder.defineCatalogHandler(async function(args) {
     const page = (args.extra && args.extra.skip ? (args.extra.skip / 20) + 1 : 1);
     const date = new Date().toISOString().split('T')[0];
     
-    // Safety Check
-    if (!TMDB_KEY) {
-        console.log("❌ Error: TMDB_KEY is missing in Render Environment Variables.");
-        return { metas: [] };
-    }
+    if (!TMDB_KEY) return { metas: [] };
 
     const baseParams = `api_key=${TMDB_KEY}&language=en-US&include_adult=false&with_original_language=ko&page=${page}`;
     let fetchUrl = "";
@@ -108,7 +104,7 @@ builder.defineMetaHandler(async function(args) {
     } catch (e) { return { meta: {} }; }
 });
 
-// --- 3. STREAM HANDLER (NO CONSUMET! YTS + NYAA ONLY) ---
+// --- 3. STREAM HANDLER (YTS + NYAA FOR ALL) ---
 builder.defineStreamHandler(async function(args) {
     if (!args.id.startsWith("tmdb:")) return { streams: [] };
 
@@ -117,18 +113,19 @@ builder.defineStreamHandler(async function(args) {
     const season = parts[2] ? parseInt(parts[2]) : null;
     const episode = parts[3] ? parseInt(parts[3]) : null;
 
-    let title = "", imdbId = "";
+    let title = "", imdbId = "", originalName = "";
     try {
         const type = args.type === 'movie' ? 'movie' : 'tv';
         const meta = (await axios.get(`https://api.themoviedb.org/3/${type}/${tmdbId}?append_to_response=external_ids&api_key=${TMDB_KEY}&language=en-US`)).data;
         title = meta.title || meta.name;
+        originalName = meta.original_title || meta.original_name || title;
         imdbId = meta.external_ids.imdb_id;
     } catch (e) { return { streams: [] }; }
 
     console.log(`🔍 Searching for: ${title} (S${season}E${episode})`);
     const streams = [];
 
-    // === STRATEGY 1: YTS (Perfect for Movies) ===
+    // === STRATEGY 1: YTS (Good for some Movies) ===
     if (!season && imdbId) {
         try {
             const ytsResp = await axios.get(`https://yts.mx/api/v2/list_movies.json?query_term=${imdbId}`);
@@ -142,34 +139,43 @@ builder.defineStreamHandler(async function(args) {
         } catch (e) { console.log("YTS Error:", e.message); }
     }
 
-    // === STRATEGY 2: NYAA.SI (Perfect for K-Dramas) ===
-    if (season) {
-        try {
-            // Queries: "Title S01E01" AND "Title 01" (Covering both naming styles)
-            const queries = [
+    // === STRATEGY 2: NYAA.SI (The K-Content King) ===
+    // ✅ FIX: Now runs for BOTH Movies and Series
+    try {
+        let queries = [];
+        if (season) {
+            // SERIES: Search for "Title S01E01" or "Title 01"
+            queries = [
                 `${title} S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}`,
                 `${title} ${String(episode).padStart(2, '0')}` 
             ];
+        } else {
+            // MOVIES: Search by English Title and Original (Korean) Title
+            queries = [
+                `${title}`, 
+                `${title} 1080p`
+            ];
+            // If the original name (Korean) is different, try that too!
+            if (originalName && originalName !== title) {
+                queries.push(originalName);
+            }
+        }
 
-            for (const q of queries) {
-                // Read Nyaa RSS Feed directly (No scraping, no blocking)
-                const nyaaUrl = `https://nyaa.si/?page=rss&q=${encodeURIComponent(q)}&c=0_0&f=0`;
-                const rss = (await axios.get(nyaaUrl)).data;
-                
-                // Extract Magnets
-                const magnets = [...rss.matchAll(/<link>(magnet:.*?)<\/link>/g)];
-                
-                if (magnets.length > 0) {
-                    const magnet = magnets[0][1].replace(/&amp;/g, '&').replace(/<!\[CDATA\[/g, '').replace(/\]\]>/g, '');
-                    const rdUrl = await resolveMagnet(magnet);
-                    if (rdUrl) {
-                        streams.push({ title: `🚀 RD [Nyaa] - ${q}`, url: rdUrl });
-                        break; // Stop if we found a working link
-                    }
+        for (const q of queries) {
+            const nyaaUrl = `https://nyaa.si/?page=rss&q=${encodeURIComponent(q)}&c=0_0&f=0`;
+            const rss = (await axios.get(nyaaUrl)).data;
+            const magnets = [...rss.matchAll(/<link>(magnet:.*?)<\/link>/g)];
+            
+            if (magnets.length > 0) {
+                const magnet = magnets[0][1].replace(/&amp;/g, '&').replace(/<!\[CDATA\[/g, '').replace(/\]\]>/g, '');
+                const rdUrl = await resolveMagnet(magnet);
+                if (rdUrl) {
+                    streams.push({ title: `🚀 RD [Nyaa] - ${q}`, url: rdUrl });
+                    break; // Stop if we found a good link
                 }
             }
-        } catch (e) { console.log("Nyaa Error:", e.message); }
-    }
+        }
+    } catch (e) { console.log("Nyaa Error:", e.message); }
 
     return { streams: streams };
 });
