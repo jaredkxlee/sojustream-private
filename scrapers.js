@@ -6,12 +6,12 @@ const axios = require('axios');
 const TMDB_KEY = process.env.TMDB_KEY;
 const PROXY_URL = "https://jaredlkx-soju-tunnel.hf.space"; 
 // 🛡️ AUTO-FIX: Trims hidden spaces from the password
-const PROXY_PASS = (process.env.PROXY_PASS || "").trim();
+constRPXY_PASS = (process.env.PROXY_PASS || "").trim();
 
 const builder = new addonBuilder({
-    id: "org.sojustream.jared.v15", 
-    version: "15.0.0",
-    name: "SojuStream (Trimmed Auth)",
+    id: "org.sojustream.jared.v16", // 👈 Version 16 (Check for this in logs!)
+    version: "16.0.0",
+    name: "SojuStream (v16 Fix)",
     description: "KissKH via MediaFlow",
     resources: ["catalog", "stream"], 
     types: ["series", "movie"],
@@ -38,7 +38,7 @@ const builder = new addonBuilder({
     ]
 });
 
-// ✅ HELPER: PROXY URL BUILDER
+// ✅ HELPER: SAFE URL BUILDER (Fixes 422 Errors)
 function getProxiedUrl(targetUrl) {
     const headers = { 
         "Referer": "https://kisskh.do/",
@@ -47,7 +47,7 @@ function getProxiedUrl(targetUrl) {
 
     const params = new URLSearchParams();
     params.append("url", targetUrl);
-    params.append("api_password", PROXY_PASS);
+    params.append("api_password", PROXY_PASS || ""); // Uses your 12345678 password
     params.append("headers", JSON.stringify(headers));
 
     return `${PROXY_URL}/proxy/stream?${params.toString()}`;
@@ -55,26 +55,22 @@ function getProxiedUrl(targetUrl) {
 
 // --- 1. CATALOG HANDLER ---
 builder.defineCatalogHandler(async (args) => {
-    console.log(`[v15] Requesting ${args.id}`); 
+    console.log(`[v16] Requesting ${args.id}`); // 👈 LOOK FOR [v16] IN LOGS
     const domain = "kisskh.do";
     let targetUrl = "";
     const page = args.extra && args.extra.skip ? Math.floor(args.extra.skip / 20) + 1 : 1;
     
-    // ✅ USING YOUR EXACT API FINDINGS
     if (args.extra && args.extra.search) {
         targetUrl = `https://${domain}/api/DramaList/Search?q=${encodeURIComponent(args.extra.search)}&type=0`;
     } else {
         switch(args.id) {
             case "latest_updates":
-                // Your finding: type=0&sub=0&country=0&status=0&order=2
                 targetUrl = `https://${domain}/api/DramaList/List?page=${page}&type=0&sub=0&country=0&status=0&order=2`;
                 break;
             case "top_kdrama":
-                // Your finding: country=2...order=1
                 targetUrl = `https://${domain}/api/DramaList/List?page=${page}&type=0&sub=0&country=2&status=0&order=1`;
                 break;
             case "upcoming_drama":
-                // Your finding: status=3...order=2
                 targetUrl = `https://${domain}/api/DramaList/List?page=${page}&type=0&sub=0&country=0&status=3&order=2`;
                 break;
             default:
@@ -84,26 +80,27 @@ builder.defineCatalogHandler(async (args) => {
 
     try {
         const proxiedUrl = getProxiedUrl(targetUrl);
-        // Debug Log: Shows password length to verify it's not empty
-        console.log(`[v15] Connecting with password length: ${PROXY_PASS.length}`);
+        // Debug Log
+        console.log(`[v16] Connecting to Proxy... (Pass len: ${PROXY_PASS.length})`);
         
         const response = await axios.get(proxiedUrl, { timeout: 15000 });
         const items = response.data.results || response.data;
 
         if (!Array.isArray(items)) {
-            // Check if it's the "MostSearch" format which wraps in 'data'
+            // Handle "MostSearch" or wrapped data formats
             if (response.data.data && Array.isArray(response.data.data)) {
                  return { metas: mapItems(response.data.data) };
             }
-            console.error("[v15] Proxy returned invalid data structure");
+            console.error("[v16] Proxy returned invalid data structure:", JSON.stringify(response.data).substring(0, 100));
             return { metas: [] };
         }
 
+        console.log(`[v16] Success! Found ${items.length} items.`);
         return { metas: mapItems(items) };
 
     } catch (e) {
-        if (e.response) console.error(`[v15] Proxy Error ${e.response.status}:`, e.response.data);
-        else console.error("[v15] Connection Error:", e.message);
+        if (e.response) console.error(`[v16] Proxy Error ${e.response.status}:`, e.response.data);
+        else console.error("[v16] Connection Error:", e.message);
         return { metas: [] };
     }
 });
