@@ -3,7 +3,8 @@ const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 const axios = require('axios');
 
 // 🔒 CONFIGURATION
-const TMDB_KEY = b80e5b1b965da72a2a23ba5680cb778a;
+// ✅ Fix: fall back to hard‑coded key if env var is missing
+const TMDB_KEY = process.env.TMDB_KEY || "b80e5b1b965da72a2a23ba5680cb778a";
 
 const builder = new addonBuilder({
     id: "org.sojustream.catalog.safe", 
@@ -23,32 +24,26 @@ const builder = new addonBuilder({
 
 // 🛡️ STRICT CONTENT FILTER
 function isSafeContent(item) {
-    if (!item.poster_path) return false; // Filter out broken metadata
+    if (!item.poster_path) return false;
 
     const title = (item.title || item.name || "").toLowerCase();
     const overview = (item.overview || "").toLowerCase();
-    
-    // 1. HARDCORE KEYWORDS
+
     const banList = [
-        "erotic", "sex", "porn", "xxx", "18+", "uncensored", "nude", "nudity", 
-        "r-rated", "adult only", "av idol", "jav", "sexual", "intercourse", 
-        "carnal", "orgasm", "incest", "taboo", "rape", "gangbang", "fetish",
-        "hardcore", "softcore", "uncut", "voluptuous", "lingerie"
+        "erotic","sex","porn","xxx","18+","uncensored","nude","nudity",
+        "r-rated","adult only","av idol","jav","sexual","intercourse",
+        "carnal","orgasm","incest","taboo","rape","gangbang","fetish",
+        "hardcore","softcore","uncut","voluptuous","lingerie"
     ];
-
-    // 2. EROTICA TROPES (The "Korean Pink Movie" Filter)
     const tropeList = [
-        "young mother", "mother-in-law", "sister-in-law", "friend's mom", 
-        "friend's mother", "boarding house", "massage shop", "massage salon", 
-        "private lesson", "tutor", "plumber", "stepmother", "stepmom", 
-        "stepdaughter", "stepson", "stepparent", "affair 2", "affair 3" 
+        "young mother","mother-in-law","sister-in-law","friend's mom",
+        "friend's mother","boarding house","massage shop","massage salon",
+        "private lesson","tutor","plumber","stepmother","stepmom",
+        "stepdaughter","stepson","stepparent","affair 2","affair 3"
     ];
 
-    // Check Title
     if (banList.some(word => title.includes(word))) return false;
-    if (tropeList.some(phrase => title.includes(phrase))) return false; // 👈 Fixed typo here
-
-    // Check Overview (Whole words only to avoid false positives)
+    if (tropeList.some(phrase => title.includes(phrase))) return false;
     if (banList.some(word => overview.includes(` ${word} `))) return false;
 
     return true;
@@ -58,7 +53,7 @@ function isSafeContent(item) {
 builder.defineCatalogHandler(async function(args) {
     const page = (args.extra && args.extra.skip ? Math.floor(args.extra.skip / 20) + 1 : 1);
     const date = new Date().toISOString().split('T')[0];
-    
+
     if (!TMDB_KEY) return { metas: [] };
 
     const baseParams = `api_key=${TMDB_KEY}&language=en-US&include_adult=false&with_original_language=ko&page=${page}`;
@@ -79,10 +74,8 @@ builder.defineCatalogHandler(async function(args) {
     try {
         const response = await axios.get(fetchUrl);
         let items = response.data.results || [];
-
-        // ✅ APPLY FIX
         const safeItems = items.filter(isSafeContent);
-        
+
         return {
             metas: safeItems.map(item => ({
                 id: `tmdb:${item.id}`,
@@ -100,14 +93,14 @@ builder.defineCatalogHandler(async function(args) {
 
 // --- 2. META HANDLER ---
 builder.defineMetaHandler(async function(args) {
-    if (!args.id.startsWith("tmdb:")) return { meta: {} }; 
+    if (!args.id.startsWith("tmdb:")) return { meta: {} };
     const tmdbId = args.id.split(":")[1];
-    const type = args.type === 'series' ? 'tv' : 'movie'; 
+    const type = args.type === 'series' ? 'tv' : 'movie';
 
     try {
         const url = `https://api.themoviedb.org/3/${type}/${tmdbId}?api_key=${TMDB_KEY}&language=en-US`;
         const meta = (await axios.get(url)).data;
-        
+
         const result = {
             id: args.id,
             type: args.type,
@@ -116,7 +109,7 @@ builder.defineMetaHandler(async function(args) {
             background: meta.backdrop_path ? `https://image.tmdb.org/t/p/original${meta.backdrop_path}` : null,
             description: meta.overview,
             releaseInfo: (meta.release_date || meta.first_air_date || "").substring(0, 4),
-            videos: [] 
+            videos: []
         };
 
         if (args.type === 'series') {
@@ -133,7 +126,9 @@ builder.defineMetaHandler(async function(args) {
             } catch (e) {}
         }
         return { meta: result };
-    } catch (e) { return { meta: {} }; }
+    } catch (e) { 
+        return { meta: {} }; 
+    }
 });
 
 serveHTTP(builder.getInterface(), { port: process.env.PORT || 7000 });
