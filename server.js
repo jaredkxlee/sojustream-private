@@ -2,20 +2,22 @@ const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 const axios = require('axios');
 
 // =========================================================================
-// 🔒 SECURE CONFIGURATION (Keys from Render Environment)
+// 🔒 SECURE CONFIGURATION (Only TMDB needed now)
 // =========================================================================
 
 const TMDB_KEY = process.env.TMDB_KEY; 
-const RD_TOKEN = process.env.RD_TOKEN;     
 
 // =========================================================================
 
 const builder = new addonBuilder({
-    id: "org.sojustream.platinum",
-    version: "10.1.0",
-    name: "SojuStream (Platinum)",
-    description: "K-Content • YTS + Nyaa (Movies & Series) • Real-Debrid",
-    resources: ["catalog", "meta", "stream"], 
+    id: "org.sojustream.catalog.only",
+    version: "11.0.0",
+    name: "SojuStream (Catalog Only)",
+    description: "K-Drama & Movie Menus • Uses Cinemeta for Links • Works with Torrentio/RD",
+    
+    // ✅ ONLY "catalog" and "meta" - No more stream handling
+    resources: ["catalog", "meta"], 
+    
     types: ["movie", "series"],
     catalogs: [
         { type: "movie", id: "kmovie_popular", name: "Popular K-Movies", extra: [{ name: "search" }, { name: "skip" }] },
@@ -26,7 +28,7 @@ const builder = new addonBuilder({
     idPrefixes: ["tmdb:"]
 });
 
-// --- 1. CATALOG HANDLER ---
+// --- 1. CATALOG HANDLER (INFINITE SCROLL) ---
 builder.defineCatalogHandler(async function(args) {
     const page = (args.extra && args.extra.skip ? (args.extra.skip / 20) + 1 : 1);
     const date = new Date().toISOString().split('T')[0];
@@ -45,19 +47,19 @@ builder.defineCatalogHandler(async function(args) {
     try {
         const response = await axios.get(fetchUrl);
         let items = response.data.results || [];
-        // 🛡️ NO PORN FILTER
+
+        // 🛡️ PORN FILTER
         items = items.filter(item => {
             const title = (item.title || item.name || "").toLowerCase();
             const badWords = ["erotic", "sex", "porn", "japanese mom", "18+", "uncensored"];
             if (!item.poster_path) return false;
-            if (badWords.some(word => title.includes(word))) return false;
-            return true;
+            return !badWords.some(word => title.includes(word));
         });
 
         return {
             metas: items.map(item => ({
                 id: `tmdb:${item.id}`,
-                type: item.media_type === 'movie' ? 'movie' : 'series',
+                type: item.media_type === 'movie' || args.type === 'movie' ? 'movie' : 'series',
                 name: item.title || item.name,
                 poster: `https://image.tmdb.org/t/p/w500${item.poster_path}`,
                 description: item.overview
@@ -67,16 +69,19 @@ builder.defineCatalogHandler(async function(args) {
 });
 
 // --- 2. META HANDLER ---
+// This ensures that when you click a poster, you see the seasons and episodes
 builder.defineMetaHandler(async function(args) {
-    if (!args.id.startsWith("tmdb:")) return {wb: true}; 
+    if (!args.id.startsWith("tmdb:")) return { meta: {} }; 
     const tmdbId = args.id.split(":")[1];
-    const type = args.type; 
+    const type = args.type === 'series' ? 'tv' : 'movie'; 
+
     try {
-        const url = `https://api.themoviedb.org/3/${type === 'series' ? 'tv' : 'movie'}/${tmdbId}?api_key=${TMDB_KEY}&language=en-US`;
+        const url = `https://api.themoviedb.org/3/${type}/${tmdbId}?api_key=${TMDB_KEY}&language=en-US`;
         const meta = (await axios.get(url)).data;
+        
         const result = {
             id: args.id,
-            type: type,
+            type: args.type,
             name: meta.title || meta.name,
             poster: `https://image.tmdb.org/t/p/w500${meta.poster_path}`,
             background: meta.backdrop_path ? `https://image.tmdb.org/t/p/original${meta.backdrop_path}` : null,
@@ -84,118 +89,23 @@ builder.defineMetaHandler(async function(args) {
             releaseInfo: (meta.release_date || meta.first_air_date || "").substring(0, 4),
             videos: [] 
         };
-        if (type === 'series' || type === 'tv') {
+
+        if (args.type === 'series') {
             try {
+                // Fetch Season 1 Episodes so they appear in Stremio
                 const s1Url = `https://api.themoviedb.org/3/tv/${tmdbId}/season/1?api_key=${TMDB_KEY}&language=en-US`;
                 const s1Data = (await axios.get(s1Url)).data;
                 result.videos = s1Data.episodes.map(ep => ({
                     id: `tmdb:${tmdbId}:${ep.season_number}:${ep.episode_number}`,
                     title: ep.name || `Episode ${ep.episode_number}`,
                     released: new Date(ep.air_date).toISOString(),
-                    thumbnail: ep.still_path ? `https://image.tmdb.org/t/p/w500${ep.still_path}` : null,
                     episode: ep.episode_number,
                     season: ep.season_number,
                 }));
             } catch (e) {}
-        } else {
-            result.videos = [{ id: `tmdb:${tmdbId}`, title: meta.title, released: new Date(meta.release_date).toISOString() }];
         }
         return { meta: result };
     } catch (e) { return { meta: {} }; }
 });
-
-// --- 3. STREAM HANDLER (YTS + NYAA FOR ALL) ---
-builder.defineStreamHandler(async function(args) {
-    if (!args.id.startsWith("tmdb:")) return { streams: [] };
-
-    const parts = args.id.split(":");
-    const tmdbId = parts[1];
-    const season = parts[2] ? parseInt(parts[2]) : null;
-    const episode = parts[3] ? parseInt(parts[3]) : null;
-
-    let title = "", imdbId = "", originalName = "";
-    try {
-        const type = args.type === 'movie' ? 'movie' : 'tv';
-        const meta = (await axios.get(`https://api.themoviedb.org/3/${type}/${tmdbId}?append_to_response=external_ids&api_key=${TMDB_KEY}&language=en-US`)).data;
-        title = meta.title || meta.name;
-        originalName = meta.original_title || meta.original_name || title;
-        imdbId = meta.external_ids.imdb_id;
-    } catch (e) { return { streams: [] }; }
-
-    console.log(`🔍 Searching for: ${title} (S${season}E${episode})`);
-    const streams = [];
-
-    // === STRATEGY 1: YTS (Good for some Movies) ===
-    if (!season && imdbId) {
-        try {
-            const ytsResp = await axios.get(`https://yts.mx/api/v2/list_movies.json?query_term=${imdbId}`);
-            if (ytsResp.data.data.movies && ytsResp.data.data.movies.length > 0) {
-                const movie = ytsResp.data.data.movies[0];
-                const torrent = movie.torrents.find(t => t.quality === "1080p") || movie.torrents[0];
-                const magnet = `magnet:?xt=urn:btih:${torrent.hash}&dn=${encodeURIComponent(movie.title)}`;
-                const rdUrl = await resolveMagnet(magnet);
-                if (rdUrl) streams.push({ title: `🚀 RD [YTS] 1080p - ${title}`, url: rdUrl });
-            }
-        } catch (e) { console.log("YTS Error:", e.message); }
-    }
-
-    // === STRATEGY 2: NYAA.SI (The K-Content King) ===
-    // ✅ FIX: Now runs for BOTH Movies and Series
-    try {
-        let queries = [];
-        if (season) {
-            // SERIES: Search for "Title S01E01" or "Title 01"
-            queries = [
-                `${title} S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}`,
-                `${title} ${String(episode).padStart(2, '0')}` 
-            ];
-        } else {
-            // MOVIES: Search by English Title and Original (Korean) Title
-            queries = [
-                `${title}`, 
-                `${title} 1080p`
-            ];
-            // If the original name (Korean) is different, try that too!
-            if (originalName && originalName !== title) {
-                queries.push(originalName);
-            }
-        }
-
-        for (const q of queries) {
-            const nyaaUrl = `https://nyaa.si/?page=rss&q=${encodeURIComponent(q)}&c=0_0&f=0`;
-            const rss = (await axios.get(nyaaUrl)).data;
-            const magnets = [...rss.matchAll(/<link>(magnet:.*?)<\/link>/g)];
-            
-            if (magnets.length > 0) {
-                const magnet = magnets[0][1].replace(/&amp;/g, '&').replace(/<!\[CDATA\[/g, '').replace(/\]\]>/g, '');
-                const rdUrl = await resolveMagnet(magnet);
-                if (rdUrl) {
-                    streams.push({ title: `🚀 RD [Nyaa] - ${q}`, url: rdUrl });
-                    break; // Stop if we found a good link
-                }
-            }
-        }
-    } catch (e) { console.log("Nyaa Error:", e.message); }
-
-    return { streams: streams };
-});
-
-// --- HELPER: Real-Debrid Unrestrict ---
-async function resolveMagnet(magnet) {
-    try {
-        const headers = { 'Authorization': `Bearer ${RD_TOKEN}` };
-        // 1. Add Magnet
-        const add = await axios.post('https://api.real-debrid.com/rest/1.0/torrents/addMagnet', `magnet=${encodeURIComponent(magnet)}`, { headers });
-        // 2. Select All Files
-        await axios.post(`https://api.real-debrid.com/rest/1.0/torrents/selectFiles/${add.data.id}`, 'files=all', { headers });
-        // 3. Get Link Info
-        const info = await axios.get(`https://api.real-debrid.com/rest/1.0/torrents/info/${add.data.id}`, { headers });
-        // 4. Unrestrict First Link
-        if (info.data.links && info.data.links.length > 0) {
-            const unres = await axios.post('https://api.real-debrid.com/rest/1.0/unrestrict/link', `link=${info.data.links[0]}`, { headers });
-            return unres.data.download;
-        }
-    } catch (e) { return null; }
-}
 
 serveHTTP(builder.getInterface(), { port: process.env.PORT || 7000 });
