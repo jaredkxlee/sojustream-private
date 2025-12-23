@@ -2,6 +2,10 @@ require('dotenv').config();
 const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 const axios = require('axios');
 
+<<<<<<< HEAD
+=======
+// ⬇️ Add these two lines
+>>>>>>> 689d87ce35c9569fbe4825c1b574d2ddeb294ebf
 const { wrapper } = require('axios-cookiejar-support');
 const tough = require('tough-cookie');
 const jar = new tough.CookieJar();
@@ -268,4 +272,8 @@ builder.defineStreamHandler(async (args) => {
     }
 });
 
+<<<<<<< HEAD
 serveHTTP(builder.getInterface(), { port: process.env.PORT || 10000, host: "0.0.0.0" });
+=======
+serveHTTP(builder.getInterface(), { port: process.env.PORT || 10000, host: "0.0.0.0" });
+>>>>>>> 689d87ce35c9569fbe4825c1b574d2ddeb294ebf
