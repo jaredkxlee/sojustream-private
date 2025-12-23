@@ -11,9 +11,9 @@ const FLARE_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, lik
 
 const builder = new addonBuilder({
     id: "org.sojustream.jared.v29",
-    version: "29.0.2",
+    version: "29.0.5",
     name: "SojuStream (Stable)",
-    description: "KissKH: Fingerprint Matched | HF Proxy",
+    description: "KissKH: Fingerprint Matched | South Korea Only",
     resources: ["catalog", "meta", "stream"], 
     types: ["series", "movie"],
     idPrefixes: ["kisskh:"], 
@@ -24,7 +24,7 @@ const builder = new addonBuilder({
 });
 
 /**
- * Optimized fetcher that matches User-Agent fingerprints.
+ * Optimized fetcher that matches User-Agent fingerprints and reuses sessions.
  */
 async function fetchWithFlare(targetUrl, customTimeout = 60000) {
     try {
@@ -40,7 +40,7 @@ async function fetchWithFlare(targetUrl, customTimeout = 60000) {
             url: targetUrl,
             session: SESSION_NAME,
             maxTimeout: customTimeout,
-            headers: { "User-Agent": FLARE_UA } // Force UA matching
+            headers: { "User-Agent": FLARE_UA } 
         }, { timeout: customTimeout + 5000 });
 
         if (response.data && response.data.status === 'ok') {
@@ -53,46 +53,77 @@ async function fetchWithFlare(targetUrl, customTimeout = 60000) {
         }
         return null;
     } catch (e) {
-        console.error(`[v29] UA Match Error: ${e.message}`);
-        // If it crashes, reset the session
+        console.error(`[v29] Proxy Error: ${e.message}`);
+        // If it crashes, reset the session to clear memory
         axios.post(FLARESOLVERR_URL, { cmd: 'sessions.destroy', session: SESSION_NAME }).catch(() => {});
         return null;
     }
 }
 
-// --- CATALOG ---
+// --- 1. CATALOG HANDLER ---
 builder.defineCatalogHandler(async (args) => {
     const page = args.extra && args.extra.skip ? Math.floor(args.extra.skip / 20) + 1 : 1;
-    const targetUrl = `https://kisskh.do/api/DramaList/List?page=${page}&type=0&sub=0&country=2&status=0&order=2`;
+    let targetUrl = `https://kisskh.do/api/DramaList/List?page=${page}&type=0&sub=0&country=2&status=0&order=2`;
+    
+    if (args.id === "top_kdrama") {
+        targetUrl = `https://kisskh.do/api/DramaList/List?page=${page}&type=0&sub=0&country=2&status=0&order=1`;
+    }
 
-    const data = await fetchWithFlare(targetUrl, 45000);
+    const data = await fetchWithFlare(targetUrl, 40000);
     const items = data ? (data.results || data.data || data) : [];
     
     return { metas: Array.isArray(items) ? items.map(item => ({
-        id: `kisskh:${item.id}`, type: "series", name: item.title, poster: item.thumbnail, posterShape: 'landscape'
+        id: `kisskh:${item.id}`,
+        type: "series",
+        name: item.title,
+        poster: item.thumbnail,
+        posterShape: 'landscape'
     })) : [] };
 });
 
-// --- STREAM ---
+// --- 2. META HANDLER ---
+builder.defineMetaHandler(async (args) => {
+    const kisskhId = args.id.split(":")[1];
+    const data = await fetchWithFlare(`https://kisskh.do/api/DramaList/Drama/${kisskhId}?isMovie=false`, 45000);
+    
+    if (!data) return { meta: {} };
+
+    return { meta: {
+        id: args.id,
+        type: "series",
+        name: data.title,
+        poster: data.thumbnail,
+        background: data.thumbnail,
+        description: data.description,
+        videos: (data.episodes || []).map(ep => ({
+            id: `kisskh:${kisskhId}:1:${ep.number}`, 
+            title: `Episode ${ep.number}`,
+            season: 1,
+            episode: parseInt(ep.number)
+        })).sort((a,b) => a.episode - b.episode)
+    }};
+});
+
+// --- 3. STREAM HANDLER ---
 builder.defineStreamHandler(async (args) => {
     const parts = args.id.split(":");
     const dramaId = parts[1];
     const epNum = parts[3];
 
-    // Find the current Episode ID
+    // Get the specific Episode ID for the VideoService
     const data = await fetchWithFlare(`https://kisskh.do/api/DramaList/Drama/${dramaId}?isMovie=false`, 50000);
     if (!data || !data.episodes) return { streams: [] };
 
     const ep = data.episodes.find(e => String(e.number) === String(epNum));
     if (!ep) return { streams: [] };
 
-    // Request the direct video link
+    // Fetch the final link
     const videoData = await fetchWithFlare(`https://kisskh.do/api/ExternalLoader/VideoService/${ep.id}?device=2`, 55000);
 
     if (videoData && videoData.Video) {
         return { streams: [{
             name: "⚡ SojuStream",
-            title: `Ep ${epNum} | Fingerprint Matched`,
+            title: `Ep ${epNum} | 1080p | Stable`,
             url: videoData.Video
         }] };
     }
