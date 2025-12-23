@@ -2,19 +2,15 @@ require('dotenv').config();
 const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 const axios = require('axios');
 
-// 🔒 CONFIGURATION
-const FLARESOLVERR_URL = "https://soju-proxy.onrender.com/v1"; 
-const TMDB_KEY = "b80e5b1b965da72a2a23ba5680cb778a";
-const SESSION_NAME = 'kisskh-v27';
-
-// 🚀 IN-MEMORY CACHE
-const CACHE = { meta: {}, expiry: {} };
+// 🔒 THE NEW WORKING PROXY URL
+const FLARESOLVERR_URL = "https://jaredlkx-soju-proxy.hf.space/v1"; 
+const SESSION_NAME = 'sojustream-v28';
 
 const builder = new addonBuilder({
-    id: "org.sojustream.jared.v27",
-    version: "27.0.0",
-    name: "SojuStream (v27 Korea Only)",
-    description: "KissKH: Korea Only, Performance Fix",
+    id: "org.sojustream.jared.v28",
+    version: "28.0.0",
+    name: "SojuStream (Korea Only)",
+    description: "KissKH: Fixed Streams via HF Proxy",
     resources: ["catalog", "meta", "stream"], 
     types: ["series", "movie"],
     idPrefixes: ["kisskh:"], 
@@ -25,15 +21,10 @@ const builder = new addonBuilder({
     ]
 });
 
-// ✅ HELPER: INTELLIGENT FETCH
-async function fetchWithFlare(targetUrl, useCache = true, customTimeout = 40000) {
-    if (useCache && CACHE[targetUrl] && Date.now() < CACHE.expiry[targetUrl]) return CACHE[targetUrl];
-
+// ✅ HELPER: PROXY FETCH
+async function fetchWithFlare(targetUrl, customTimeout = 50000) {
     try {
-        console.log(`[v27] ⏳ Requesting: ${targetUrl}`);
-        // Ensure session exists
         await axios.post(FLARESOLVERR_URL, { cmd: 'sessions.create', session: SESSION_NAME }).catch(() => {});
-
         const response = await axios.post(FLARESOLVERR_URL, {
             cmd: 'request.get',
             url: targetUrl,
@@ -41,52 +32,40 @@ async function fetchWithFlare(targetUrl, useCache = true, customTimeout = 40000)
             maxTimeout: customTimeout,
         }, { timeout: customTimeout + 5000 });
 
-        if (response.data.status === 'ok') {
+        if (response.data && response.data.status === 'ok') {
             const rawText = response.data.solution.response;
             const jsonStart = rawText.indexOf('{');
             const jsonEnd = rawText.lastIndexOf('}');
             if (jsonStart !== -1 && jsonEnd !== -1) {
-                const data = JSON.parse(rawText.substring(jsonStart, jsonEnd + 1));
-                if (useCache) {
-                    CACHE[targetUrl] = data;
-                    CACHE.expiry[targetUrl] = Date.now() + (30 * 60 * 1000); 
-                }
-                return data;
+                return JSON.parse(rawText.substring(jsonStart, jsonEnd + 1));
             }
         }
         return null;
     } catch (e) {
-        console.error(`[v27] ❌ Error: ${e.message}`);
+        console.error(`[v28] Proxy Error: ${e.message}`);
         return null;
     }
 }
 
-// --- 1. CATALOG HANDLER (Fixed Korea Only) ---
+// --- 1. CATALOG ---
 builder.defineCatalogHandler(async (args) => {
     const page = args.extra && args.extra.skip ? Math.floor(args.extra.skip / 20) + 1 : 1;
-    let targetUrl = "";
-    switch(args.id) {
-        case "latest_updates": targetUrl = `https://kisskh.do/api/DramaList/List?page=${page}&type=0&sub=0&country=2&status=0&order=2`; break;
-        case "top_kdrama": targetUrl = `https://kisskh.do/api/DramaList/List?page=${page}&type=0&sub=0&country=2&status=0&order=1`; break;
-        case "upcoming_drama": targetUrl = `https://kisskh.do/api/DramaList/List?page=${page}&type=0&sub=0&country=2&status=3&order=2`; break;
-        default: return { metas: [] };
-    }
+    let targetUrl = `https://kisskh.do/api/DramaList/List?page=${page}&type=0&sub=0&country=2&status=0&order=2`;
+    if (args.id === "top_kdrama") targetUrl = `https://kisskh.do/api/DramaList/List?page=${page}&type=0&sub=0&country=2&status=0&order=1`;
+    if (args.id === "upcoming_drama") targetUrl = `https://kisskh.do/api/DramaList/List?page=${page}&type=0&sub=0&country=2&status=3&order=2`;
 
     const data = await fetchWithFlare(targetUrl);
     const items = data ? (data.results || data.data || data) : [];
-    if (Array.isArray(items)) {
-        return { metas: items.map(item => ({
-            id: `kisskh:${item.id}`, type: "series", name: item.title, poster: item.thumbnail, posterShape: 'landscape'
-        })) };
-    }
-    return { metas: [] };
+    return { metas: Array.isArray(items) ? items.map(item => ({
+        id: `kisskh:${item.id}`, type: "series", name: item.title, poster: item.thumbnail, posterShape: 'landscape'
+    })) : [] };
 });
 
-// --- 2. META HANDLER ---
+// --- 2. META ---
 builder.defineMetaHandler(async (args) => {
     const kisskhId = args.id.split(":")[1];
     const data = await fetchWithFlare(`https://kisskh.do/api/DramaList/Drama/${kisskhId}?isMovie=false`);
-    if (!data) return { meta: { id: args.id, type: "series", name: "Error" } };
+    if (!data) return { meta: {} };
 
     return { meta: {
         id: args.id, type: "series", name: data.title, poster: data.thumbnail, background: data.thumbnail, description: data.description,
@@ -96,24 +75,23 @@ builder.defineMetaHandler(async (args) => {
     }};
 });
 
-// --- 3. STREAM HANDLER (FlareSolverr for ALL requests) ---
+// --- 3. STREAM (Fixed logic) ---
 builder.defineStreamHandler(async (args) => {
     const parts = args.id.split(":");
     const dramaId = parts[1];
     const epNum = parts[3];
 
-    // 1. Get Details (Fresh Fetch)
     const data = await fetchWithFlare(`https://kisskh.do/api/DramaList/Drama/${dramaId}?isMovie=false`);
     if (!data || !data.episodes) return { streams: [] };
 
     const ep = data.episodes.find(e => String(e.number) === String(epNum));
     if (!ep) return { streams: [] };
 
-    // 2. Get Video Link (Use FlareSolverr to solve the challenge on this specific API)
-    const videoData = await fetchWithFlare(`https://kisskh.do/api/ExternalLoader/VideoService/${ep.id}?device=2`, false, 50000);
+    // Use a fresh request for the video link
+    const videoData = await fetchWithFlare(`https://kisskh.do/api/ExternalLoader/VideoService/${ep.id}?device=2`, 55000);
 
     if (videoData && videoData.Video) {
-        return { streams: [{ name: "⚡ SojuStream", title: `1080p | Ep ${epNum}`, url: videoData.Video }] };
+        return { streams: [{ name: "⚡ SojuStream", title: `Ep ${epNum} | 1080p`, url: videoData.Video }] };
     }
     return { streams: [] };
 });
