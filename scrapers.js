@@ -7,7 +7,6 @@ const TMDB_KEY = process.env.TMDB_KEY;
 const PROXY_URL = "https://jaredkx-soju-tunnel.hf.space"; 
 const PROXY_PASS = process.env.PROXY_PASS; 
 
-// Mandatory headers to bypass "EmptyContent" / 403 blocks
 const browserHeaders = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     "Referer": "https://kisskh.do/",
@@ -15,14 +14,13 @@ const browserHeaders = {
 };
 
 const builder = new addonBuilder({
-    id: "org.sojustream.do",
-    version: "4.1.0",
-    name: "SojuStream (.do Multi-Catalog)",
-    description: "Multi-category Asian content from KissKH.do",
+    id: "org.sojustream.final",
+    version: "5.0.0",
+    name: "SojuStream (Fixed & Multi-Catalog)",
+    description: "Browse Top, Latest, and Upcoming Asian Dramas from KissKH.do",
     resources: ["catalog", "stream"], 
     types: ["series", "movie"],
     idPrefixes: ["tmdb:", "tt"],
-    // Unified catalog structure to prevent EmptyContent
     catalogs: [
         {
             id: "top_kdrama",
@@ -45,7 +43,7 @@ const builder = new addonBuilder({
     ]
 });
 
-// --- 1. CATALOG HANDLER (Fixed for kisskh.do) ---
+// --- 1. CATALOG HANDLER ---
 builder.defineCatalogHandler(async (args) => {
     let url = "";
     const page = args.extra && args.extra.skip ? Math.floor(args.extra.skip / 20) + 1 : 1;
@@ -63,7 +61,8 @@ builder.defineCatalogHandler(async (args) => {
             case "upcoming_drama":
                 url = `https://kisskh.do/api/DramaList/List?page=${page}&type=0&sub=0&country=0&status=3&order=2`;
                 break;
-            default: return { metas: [] };
+            default:
+                return { metas: [] };
         }
     }
 
@@ -91,6 +90,7 @@ builder.defineCatalogHandler(async (args) => {
 builder.defineStreamHandler(async (args) => {
     const streams = [];
     let tmdbId, season, episode;
+
     try {
         if (args.id.startsWith("tt")) {
             const findUrl = `https://api.themoviedb.org/3/find/${args.id.split(':')[0]}?api_key=${TMDB_KEY}&external_source=imdb_id`;
@@ -116,4 +116,29 @@ builder.defineStreamHandler(async (args) => {
         if (searchRes.data && searchRes.data[0]) {
             const drama = searchRes.data[0];
             const detail = await axios.get(`https://kisskh.do/api/DramaList/Drama/${drama.id}?isMovie=${args.type === 'movie'}`, { headers: browserHeaders });
-            const targetEp = detail.data.ep
+            const targetEp = (detail.data.episodes || []).find(e => e.number == (episode || 1));
+            
+            if (targetEp) {
+                const sInfo = await axios.get(`https://kisskh.do/api/ExternalLoader/VideoService/${targetEp.id}?device=2`, { headers: browserHeaders });
+                const videoUrl = sInfo.data.Video;
+                const pHeaders = JSON.stringify({ "Referer": "https://kisskh.do/" });
+                const proxiedUrl = `${PROXY_URL}/proxy/stream?url=${encodeURIComponent(videoUrl)}&api_password=${PROXY_PASS}&headers=${encodeURIComponent(pHeaders)}`;
+                
+                streams.push({
+                    name: "⚡ Soju-Tunnel",
+                    title: `1080p | ${title} | E${episode || 1}`,
+                    url: proxiedUrl
+                });
+            }
+        }
+    } catch (e) { 
+        console.error("Scraper Error:", e.message); 
+    }
+    return { streams };
+});
+
+// ✅ RENDER PORT BINDING
+serveHTTP(builder.getInterface(), { 
+    port: process.env.PORT || 10000, 
+    host: "0.0.0.0" 
+});
