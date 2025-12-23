@@ -7,32 +7,11 @@ const TMDB_KEY = process.env.TMDB_KEY;
 const PROXY_URL = "https://jaredkx-soju-tunnel.hf.space"; 
 const PROXY_PASS = process.env.PROXY_PASS; 
 
-// The domains you found in your search
-const DOMAINS = ["kisskh.do", "kisskh.cl", "kisskh.co"];
-
-// Function to find which mirror is currently working
-async function getActiveDomain() {
-    for (const domain of DOMAINS) {
-        try {
-            const testUrl = `https://${domain}/api/DramaList/List?page=1&type=0&order=2`;
-            await axios.get(testUrl, { 
-                timeout: 2000, 
-                headers: { "User-Agent": "Mozilla/5.0" } 
-            });
-            console.log(`✅ Using active domain: ${domain}`);
-            return domain;
-        } catch (e) {
-            console.log(`⚠️ Mirror ${domain} failed, trying next...`);
-        }
-    }
-    return "kisskh.do"; // Fallback to primary if all checks fail
-}
-
 const builder = new addonBuilder({
-    id: "org.sojustream.mirror.v8", // Changed ID to force Stremio to refresh its cache
-    version: "8.0.0",
-    name: "SojuStream (Mirror-Link)",
-    description: "Auto-switching domains for KissKH content",
+    id: "org.sojustream.proxied.v11", // New ID to force fresh start
+    version: "11.0.0",
+    name: "SojuStream (Proxied Catalog)",
+    description: "Asian Drama Mirror Catalog via MediaFlow Proxy",
     resources: ["catalog", "stream"], 
     types: ["series", "movie"],
     idPrefixes: ["tmdb:", "tt"],
@@ -46,45 +25,48 @@ const builder = new addonBuilder({
     ]
 });
 
-// --- 1. CATALOG HANDLER ---
-builder.defineCatalogHandler(async (args) => {
-    const domain = await getActiveDomain();
-    const headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Referer": `https://${domain}/`,
-        "Origin": `https://${domain}`
-    };
+// Helper: Wrap any URL in MediaFlow Proxy
+function wrapWithProxy(targetUrl, domain) {
+    const headers = JSON.stringify({ "Referer": `https://${domain}/`, "User-Agent": "Mozilla/5.0" });
+    return `${PROXY_URL}/proxy/stream?url=${encodeURIComponent(targetUrl)}&api_password=${PROXY_PASS}&headers=${encodeURIComponent(headers)}`;
+}
 
-    let url = `https://${domain}/api/DramaList/List?page=1&type=0&order=2`;
+// --- 1. PROXIED CATALOG HANDLER ---
+builder.defineCatalogHandler(async (args) => {
+    const domain = "kisskh.do";
+    let targetUrl = `https://${domain}/api/DramaList/List?page=1&pageSize=20&type=0&order=2`;
+    
     if (args.extra && args.extra.search) {
-        url = `https://${domain}/api/DramaList/Search?q=${encodeURIComponent(args.extra.search)}&type=0`;
+        targetUrl = `https://${domain}/api/DramaList/Search?q=${encodeURIComponent(args.extra.search)}&type=0`;
     }
 
     try {
-        const response = await axios.get(url, { headers });
+        // Fetch Catalog JSON THROUGH the proxy to avoid IP bans
+        const proxiedApiUrl = wrapWithProxy(targetUrl, domain);
+        const response = await axios.get(proxiedApiUrl);
         const items = response.data.results || response.data;
-        
+
         if (!Array.isArray(items)) return { metas: [] };
 
         return {
             metas: items.map(item => ({
                 id: `tmdb:${item.id}`,
                 type: "series",
-                name: item.title,      // Maps KissKH title to Stremio name
-                poster: item.thumbnail // Maps KissKH thumbnail to Stremio poster
+                name: item.title,
+                poster: item.thumbnail
             }))
         };
-    } catch (e) { 
-        console.error("Mirror Catalog Error:", e.message);
-        return { metas: [] }; 
+    } catch (e) {
+        console.error("Proxied Catalog Fail:", e.message);
+        return { metas: [] };
     }
 });
 
-// --- 2. STREAM HANDLER ---
+// --- 2. PROXIED STREAM HANDLER ---
 builder.defineStreamHandler(async (args) => {
     const streams = [];
+    const domain = "kisskh.do";
     try {
-        const domain = await getActiveDomain();
         const parts = args.id.split(":");
         const tmdbId = parts[1];
         const episode = parts[3] || 1;
@@ -93,29 +75,28 @@ builder.defineStreamHandler(async (args) => {
         const metaRes = await axios.get(`https://api.themoviedb.org/3/${type}/${tmdbId}?api_key=${TMDB_KEY}`);
         const title = metaRes.data.name || metaRes.data.title;
 
-        const searchRes = await axios.get(`https://${domain}/api/DramaList/Search?q=${encodeURIComponent(title)}&type=0`, {
-            headers: { "Referer": `https://${domain}/` }
-        });
+        // Fetch Search Results through Proxy
+        const searchUrl = `https://${domain}/api/DramaList/Search?q=${encodeURIComponent(title)}&type=0`;
+        const searchRes = await axios.get(wrapWithProxy(searchUrl, domain));
 
         if (searchRes.data && searchRes.data[0]) {
             const drama = searchRes.data[0];
-            const detail = await axios.get(`https://${domain}/api/DramaList/Drama/${drama.id}?isMovie=${args.type === 'movie'}`);
+            const detailUrl = `https://${domain}/api/DramaList/Drama/${drama.id}?isMovie=${args.type === 'movie'}`;
+            const detail = await axios.get(wrapWithProxy(detailUrl, domain));
             const targetEp = (detail.data.episodes || []).find(e => e.number == episode);
             
             if (targetEp) {
-                const sInfo = await axios.get(`https://${domain}/api/ExternalLoader/VideoService/${targetEp.id}?device=2`);
-                const videoUrl = sInfo.data.Video;
-                const pHeaders = JSON.stringify({ "Referer": `https://${domain}/` });
-                const proxiedUrl = `${PROXY_URL}/proxy/stream?url=${encodeURIComponent(videoUrl)}&api_password=${PROXY_PASS}&headers=${encodeURIComponent(pHeaders)}`;
+                const sUrl = `https://${domain}/api/ExternalLoader/VideoService/${targetEp.id}?device=2`;
+                const sInfo = await axios.get(wrapWithProxy(sUrl, domain));
                 
                 streams.push({
                     name: "⚡ Soju-Tunnel",
                     title: `1080p | ${title} | E${episode}`,
-                    url: proxiedUrl
+                    url: wrapWithProxy(sInfo.data.Video, domain)
                 });
             }
         }
-    } catch (e) { console.error("Mirror Stream Error:", e.message); }
+    } catch (e) { console.error("Proxied Stream Fail:", e.message); }
     return { streams };
 });
 
