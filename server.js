@@ -4,11 +4,11 @@ const axios = require('axios');
 
 const TMDB_KEY = process.env.TMDB_KEY || "b80e5b1b965da72a2a23ba5680cb778a";
 
-// 🚀 TURBO CACHE: Shared memory to make Search instant
+// 🚀 TURBO CACHE: Shared memory (2 Hours)
 const CACHE = new Map();
-const CACHE_TIME = 2 * 60 * 60 * 1000; // 2 Hours
+const CACHE_TIME = 2 * 60 * 60 * 1000; 
 
-// 🏷️ GENRE MAP (Required for the "Filter" display)
+// 🏷️ GENRE MAP
 const GENRES = {
     28: "Action", 12: "Adventure", 16: "Animation", 35: "Comedy", 80: "Crime", 
     99: "Documentary", 18: "Drama", 10751: "Family", 14: "Fantasy", 36: "History", 
@@ -19,13 +19,13 @@ const GENRES = {
 
 const builder = new addonBuilder({
     id: "org.sojustream.catalog.final", 
-    version: "12.8.1", // 👈 Bumped to force update
-    name: "SojuStream (Final)",
-    description: "K-Drama Menus • Global Search • Strict Filter",
+    version: "12.8.3", // 👈 BUMPED VERSION
+    name: "SojuStream (Stable)",
+    description: "K-Drama Menus • Global Search • High Stability",
     resources: ["catalog", "meta"],
     types: ["movie", "series"],
     catalogs: [
-        // 🔍 UNIFIED SEARCH (Both use the same ID 'soju_search')
+        // 🔍 UNIFIED SEARCH
         { 
             type: "movie", 
             id: "soju_search", 
@@ -47,7 +47,7 @@ const builder = new addonBuilder({
     idPrefixes: ["tmdb:"]
 });
 
-// 🛡️ STRICT SAFETY FILTER
+// 🛡️ STRICT FILTER
 function isSafeContent(item) {
     if (!item.poster_path) return false;
     const title = (item.title || item.name || "").toLowerCase();
@@ -66,8 +66,7 @@ builder.defineCatalogHandler(async function(args) {
     const skip = args.extra?.skip || 0;
     const page = Math.floor(skip / 20) + 1;
     
-    // 🧠 SHARED BRAIN: If searching, ignore the type (Movie vs Series) for the cache key.
-    // This allows one API call to feed both Stremio lists.
+    // 🧠 SHARED BRAIN: Global Search uses one cache key for both types
     const uniqueId = args.extra?.search ? "soju_search_shared" : args.id;
     const cacheKey = `${uniqueId}-${page}-${args.extra?.search || ''}`;
 
@@ -75,7 +74,6 @@ builder.defineCatalogHandler(async function(args) {
         const cachedData = CACHE.get(cacheKey);
         if (Date.now() - cachedData.time < CACHE_TIME) {
             let results = cachedData.data;
-            // ✂️ Slice the shared pie: Return only Movies OR Series based on what Stremio asked for
             if (args.id === 'soju_search') {
                 results = results.filter(m => m.type === args.type); 
             }
@@ -87,14 +85,12 @@ builder.defineCatalogHandler(async function(args) {
     const baseParams = `api_key=${TMDB_KEY}&language=en-US&include_adult=false&with_original_language=ko&page=${page}`;
     let fetchUrl = "";
     
-    // 🎨 VISUAL RULES:
-    // 1. Catalogs: Show Genres. (Search = No Genres)
+    // 🎨 DISPLAY RULES
     const showGenre = !args.extra?.search; 
-    // 2. Popular Catalog: Show Year.
     const showYear = args.id.includes('popular');
 
     if (args.extra?.search) {
-        // 🌍 GLOBAL SEARCH: No language filter here. Finds everything.
+        // 🌍 GLOBAL SEARCH
         fetchUrl = `https://api.themoviedb.org/3/search/multi?api_key=${TMDB_KEY}&query=${encodeURIComponent(args.extra.search)}&language=en-US&include_adult=false`;
     } else if (args.id === 'kmovie_popular') {
         fetchUrl = `https://api.themoviedb.org/3/discover/movie?${baseParams}&sort_by=vote_count.desc&vote_count.gte=50`;
@@ -107,17 +103,18 @@ builder.defineCatalogHandler(async function(args) {
     }
 
     try {
-        const response = await axios.get(fetchUrl, { timeout: 8000 });
+        // ⏱️ INCREASED TIMEOUT: 15s (Prevents "Failed to Fetch" on slow starts)
+        const response = await axios.get(fetchUrl, { timeout: 15000 });
         let items = response.data.results || [];
 
-        // 🛡️ STRICT FILTER: Always active
+        // 🛡️ STRICT FILTER
         items = items.filter(isSafeContent);
 
         const metas = items.map(item => {
             const year = (item.release_date || item.first_air_date || "").substring(0, 4);
             const genreList = (item.genre_ids || []).map(id => GENRES[id]).filter(Boolean).slice(0, 2);
             
-            // 📝 DESCRIPTION BUILDER: This puts [Year] Action/Drama into the text
+            // 📝 DESCRIPTION BUILDER (This creates the "Filter" look)
             let descPrefix = "";
             if (showYear && year) descPrefix += `[${year}] `;
             if (showGenre && genreList.length > 0) descPrefix += `${genreList.join('/')}`;
@@ -127,15 +124,14 @@ builder.defineCatalogHandler(async function(args) {
                 id: `tmdb:${item.id}`,
                 type: item.media_type === 'movie' || (!item.media_type && args.type === 'movie') ? 'movie' : 'series',
                 name: item.title || item.name, 
-                releaseInfo: year, // 👈 Native Stremio Year
-                genres: genreList, // 👈 Native Stremio Genres
-                description: `${descPrefix}${item.overview || ""}`, // 👈 Visible Text Filter
+                releaseInfo: year,
+                genres: genreList,
+                description: `${descPrefix}${item.overview || ""}`,
                 poster: `https://image.tmdb.org/t/p/w342${item.poster_path}`,
                 posterShape: 'poster'
             };
         });
 
-        // 💾 Save to Shared Cache
         CACHE.set(cacheKey, { time: Date.now(), data: metas });
 
         if (args.id === 'soju_search') {
@@ -144,12 +140,11 @@ builder.defineCatalogHandler(async function(args) {
 
         return { metas };
     } catch (e) { 
-        console.error("Catalog Error:", e.message);
+        console.error("Fetch Error:", e.message);
         return { metas: [] }; 
     }
 });
 
-// --- META HANDLER ---
 builder.defineMetaHandler(async function(args) {
     if (!args.id.startsWith("tmdb:")) return { meta: {} };
     const tmdbId = args.id.split(":")[1];
