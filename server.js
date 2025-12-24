@@ -19,7 +19,7 @@ const GENRES = {
 
 const builder = new addonBuilder({
     id: "org.sojustream.catalog.turbo",
-    version: "12.3.0",
+    version: "12.3.2",
     name: "SojuStream (Turbo)",
     description: "K-Drama/Movie • Genres & Years • High Speed",
     resources: ["catalog", "meta"],
@@ -60,6 +60,9 @@ builder.defineCatalogHandler(async function(args) {
     const baseParams = `api_key=${TMDB_KEY}&language=en-US&include_adult=false&with_original_language=ko&page=${page}`;
     let fetchUrl = "";
 
+    // Determine if we should show the year (Only for Popular lists)
+    const showYear = args.id.includes('popular');
+
     if (args.extra?.search) {
         fetchUrl = `https://api.themoviedb.org/3/search/multi?api_key=${TMDB_KEY}&query=${encodeURIComponent(args.extra.search)}&language=en-US&include_adult=false`;
     } else if (args.id === 'kmovie_popular') {
@@ -80,11 +83,18 @@ builder.defineCatalogHandler(async function(args) {
             const year = (item.release_date || item.first_air_date || "").substring(0, 4);
             const genreList = (item.genre_ids || []).map(id => GENRES[id]).filter(Boolean).slice(0, 2);
             
+            // 🎨 FORMATTING LOGIC:
+            // 1. If 'Popular', show Year + Genres
+            // 2. If 'New', show ONLY Genres
+            const descriptionPrefix = showYear && year ? `[${year}] ` : ``; 
+            
             return {
                 id: `tmdb:${item.id}`,
                 type: item.media_type === 'movie' || args.type === 'movie' ? 'movie' : 'series',
                 name: item.title || item.name,
-                description: `${year ? '[' + year + '] ' : ''}${genreList.join('/')}\n\n${item.overview || ""}`,
+                releaseInfo: showYear ? year : null, // Hide year metadata on 'New' lists
+                genres: genreList, // Show genres on ALL lists
+                description: `${descriptionPrefix}${genreList.join('/')}\n\n${item.overview || ""}`,
                 poster: `https://image.tmdb.org/t/p/w342${item.poster_path}`,
                 posterShape: 'poster'
             };
