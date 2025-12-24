@@ -18,14 +18,15 @@ const GENRES = {
 };
 
 const builder = new addonBuilder({
-    id: "org.sojustream.catalog.final", 
-    version: "12.7.0", 
-    name: "SojuStream (Final)",
-    description: "K-Drama/Movie • Strict Filter • Unified Search",
+    id: "org.sojustream.catalog.global", 
+    version: "12.8.0", 
+    name: "SojuStream (Global Search)",
+    description: "K-Drama Menus • Global Search • Strict Safety",
     resources: ["catalog", "meta"],
     types: ["movie", "series"],
     catalogs: [
-        // 🔍 UNIFIED SEARCH (Shared Cache)
+        // 🔍 UNIFIED SEARCH DEFINITIONS (Required by Stremio to be separate)
+        // Note: These share the same "Brain" (Cache), so they cost 0 extra resources.
         { 
             type: "movie", 
             id: "soju_search", 
@@ -38,7 +39,7 @@ const builder = new addonBuilder({
             name: "🔍 Soju Search", 
             extra: [{ name: "search", isRequired: true }] 
         },
-        // 📂 CATALOGS
+        // 📂 CATALOGS (Strictly Korean)
         { type: "movie", id: "kmovie_popular", name: "Popular K-Movies", extra: [{ name: "skip" }] },
         { type: "movie", id: "kmovie_new", name: "New K-Movies", extra: [{ name: "skip" }] },
         { type: "series", id: "kdrama_popular", name: "Popular K-Dramas", extra: [{ name: "skip" }] },
@@ -47,7 +48,7 @@ const builder = new addonBuilder({
     idPrefixes: ["tmdb:"]
 });
 
-// 🛡️ STRICT FILTER
+// 🛡️ STRICT SAFETY FILTER (Applies to EVERYTHING)
 function isSafeContent(item) {
     if (!item.poster_path) return false;
     const title = (item.title || item.name || "").toLowerCase();
@@ -66,7 +67,8 @@ builder.defineCatalogHandler(async function(args) {
     const skip = args.extra?.skip || 0;
     const page = Math.floor(skip / 20) + 1;
     
-    // 🧠 SHARED CACHE KEY (Search uses same key for Movie & Series)
+    // 🧠 SHARED CACHE KEY (The "Merge" Trick)
+    // We force Movie and Series searches to use the SAME key.
     const uniqueId = args.extra?.search ? "soju_search_shared" : args.id;
     const cacheKey = `${uniqueId}-${page}-${args.extra?.search || ''}`;
 
@@ -75,6 +77,7 @@ builder.defineCatalogHandler(async function(args) {
         if (Date.now() - cachedData.time < CACHE_TIME) {
             let results = cachedData.data;
             if (args.id === 'soju_search') {
+                // If it is a search, we just slice the shared pie for Stremio
                 results = results.filter(m => m.type === args.type); 
             }
             return { metas: results };
@@ -85,15 +88,12 @@ builder.defineCatalogHandler(async function(args) {
     const baseParams = `api_key=${TMDB_KEY}&language=en-US&include_adult=false&with_original_language=ko&page=${page}`;
     let fetchUrl = "";
     
-    // 🎨 DISPLAY LOGIC (The "Filter" Visuals)
-    // 1. Catalogs: Show Genre.
-    // 2. Search: Show NOTHING (Clean).
+    // 🎨 VISUAL RULES
     const showGenre = !args.extra?.search; 
-    
-    // 3. Popular Catalog: Show Year.
     const showYear = args.id.includes('popular');
 
     if (args.extra?.search) {
+        // GLOBAL SEARCH (No Language Filter)
         fetchUrl = `https://api.themoviedb.org/3/search/multi?api_key=${TMDB_KEY}&query=${encodeURIComponent(args.extra.search)}&language=en-US&include_adult=false`;
     } else if (args.id === 'kmovie_popular') {
         fetchUrl = `https://api.themoviedb.org/3/discover/movie?${baseParams}&sort_by=vote_count.desc&vote_count.gte=50`;
@@ -109,19 +109,17 @@ builder.defineCatalogHandler(async function(args) {
         const response = await axios.get(fetchUrl, { timeout: 6000 });
         let items = response.data.results || [];
 
-        items = items.filter(i => i.original_language === 'ko'); // Korean Only
-        items = items.filter(isSafeContent); // Strict Safety
+        // 🛡️ STRICT SAFETY (Active Everywhere)
+        items = items.filter(isSafeContent); 
 
         const metas = items.map(item => {
             const year = (item.release_date || item.first_air_date || "").substring(0, 4);
             const genreList = (item.genre_ids || []).map(id => GENRES[id]).filter(Boolean).slice(0, 2);
             
-            // 📝 DESCRIPTION BUILDER
+            // 📝 DESCRIPTION BUILDER (Only for Catalogs)
             let descPrefix = "";
             if (showYear && year) descPrefix += `[${year}] `;
-            if (showGenre &&TX genreList.length > 0) descPrefix += `${genreList.join('/')}`;
-            
-            // Add newline if we added any prefix
+            if (showGenre && genreList.length > 0) descPrefix += `${genreList.join('/')}`;
             if (descPrefix) descPrefix += "\n\n";
 
             return {
@@ -136,6 +134,7 @@ builder.defineCatalogHandler(async function(args) {
             };
         });
 
+        // Save to Shared Cache
         CACHE.set(cacheKey, { time: Date.now(), data: metas });
 
         if (args.id === 'soju_search') {
