@@ -19,16 +19,30 @@ const GENRES = {
 
 const builder = new addonBuilder({
     id: "org.sojustream.catalog.turbo",
-    version: "12.3.4", // Bumped version to force Stremio to refresh
+    version: "12.4.1", 
     name: "SojuStream (Turbo)",
-    description: "K-Drama/Movie • Genres & Years • High Speed",
+    description: "K-Drama/Movie • Unified Search • High Speed",
     resources: ["catalog", "meta"],
     types: ["movie", "series"],
     catalogs: [
-        { type: "movie", id: "kmovie_popular", name: "Popular K-Movies", extra: [{ name: "search" }, { name: "skip" }] },
-        { type: "movie", id: "kmovie_new", name: "New K-Movies", extra: [{ name: "search" }, { name: "skip" }] },
-        { type: "series", id: "kdrama_popular", name: "Popular K-Dramas", extra: [{ name: "search" }, { name: "skip" }] },
-        { type: "series", id: "kdrama_new", name: "New K-Dramas", extra: [{ name: "search" }, { name: "skip" }] }
+        // 🔍 UNIFIED SEARCH (Reduces resources by combining 4 searches into 1)
+        { 
+            type: "movie", 
+            id: "soju_search", 
+            name: "🔍 Soju Search (Movies)", 
+            extra: [{ name: "search", isRequired: true }] 
+        },
+        { 
+            type: "series", 
+            id: "soju_search", 
+            name: "🔍 Soju Search (Series)", 
+            extra: [{ name: "search", isRequired: true }] 
+        },
+        // 📂 REGULAR LISTS (No search bars here to save resources)
+        { type: "movie", id: "kmovie_popular", name: "Popular K-Movies", extra: [{ name: "skip" }] },
+        { type: "movie", id: "kmovie_new", name: "New K-Movies", extra: [{ name: "skip" }] },
+        { type: "series", id: "kdrama_popular", name: "Popular K-Dramas", extra: [{ name: "skip" }] },
+        { type: "series", id: "kdrama_new", name: "New K-Dramas", extra: [{ name: "skip" }] }
     ],
     idPrefixes: ["tmdb:"]
 });
@@ -59,13 +73,10 @@ builder.defineCatalogHandler(async function(args) {
     const date = new Date().toISOString().split('T')[0];
     const baseParams = `api_key=${TMDB_KEY}&language=en-US&include_adult=false&with_original_language=ko&page=${page}`;
     let fetchUrl = "";
+    
+    const showYear = args.id.includes('popular') || args.id === 'soju_search';
 
-    // 🧠 LOGIC UPDATE: Always show Year if it's 'Popular' OR if it's a 'Search'
-    // This fixes the issue where search results in "New Movies" had no year
-    const isSearch = !!args.extra?.search;
-    const showYear = args.id.includes('popular') || isSearch;
-
-    if (isSearch) {
+    if (args.id === 'soju_search' && args.extra?.search) {
         fetchUrl = `https://api.themoviedb.org/3/search/multi?api_key=${TMDB_KEY}&query=${encodeURIComponent(args.extra.search)}&language=en-US&include_adult=false`;
     } else if (args.id === 'kmovie_popular') {
         fetchUrl = `https://api.themoviedb.org/3/discover/movie?${baseParams}&sort_by=vote_count.desc&vote_count.gte=50`;
@@ -81,15 +92,14 @@ builder.defineCatalogHandler(async function(args) {
         const response = await axios.get(fetchUrl, { timeout: 5000 });
         let items = response.data.results || [];
 
-        // 🧹 MERGE & REDUNDANCY FIX: 
-        // If we are searching, TMDB returns mixed (Movies + TV).
-        // We must FILTER to only show what the specific catalog expects.
-        if (isSearch) {
-            if (args.type === 'movie') {
-                items = items.filter(i => i.media_type === 'movie');
-            } else if (args.type === 'series') {
-                items = items.filter(i => i.media_type === 'tv');
-            }
+        // 🇰🇷 STRICT KOREAN FILTER: 
+        // We now filter manually to ensure the original language is Korean ('ko')
+        items = items.filter(i => i.original_language === 'ko');
+
+        // 🧹 UNIFIED SEARCH FILTERING: 
+        if (args.id === 'soju_search') {
+            if (args.type === 'movie') items = items.filter(i => i.media_type === 'movie');
+            else if (args.type === 'series') items = items.filter(i => i.media_type === 'tv');
         }
 
         const safeItems = items.filter(isSafeContent);
@@ -97,17 +107,17 @@ builder.defineCatalogHandler(async function(args) {
         const metas = safeItems.map(item => {
             const year = (item.release_date || item.first_air_date || "").substring(0, 4);
             const genreList = (item.genre_ids || []).map(id => GENRES[id]).filter(Boolean).slice(0, 2);
-            
-            // Format: "[2023] Action/Drama" or just "Action/Drama"
-            const descriptionPrefix = showYear && year ? `[${year}] ` : ``; 
+            const rawTitle = item.title || item.name;
+
+            const finalName = (showYear && year) ? `${rawTitle} (${year})` : rawTitle;
             
             return {
                 id: `tmdb:${item.id}`,
                 type: item.media_type === 'movie' || args.type === 'movie' ? 'movie' : 'series',
-                name: item.title || item.name,
-                releaseInfo: showYear ? year : null, // Stremio Native Year display
-                genres: genreList, // Stremio Native Genre tags
-                description: `${descriptionPrefix}${genreList.join('/')}\n\n${item.overview || ""}`,
+                name: finalName, 
+                releaseInfo: showYear ? year : null, 
+                genres: genreList,
+                description: `${genreList.join(' / ')}\n\n${item.overview || ""}`, 
                 poster: `https://image.tmdb.org/t/p/w342${item.poster_path}`,
                 posterShape: 'poster'
             };
