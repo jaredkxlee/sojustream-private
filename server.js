@@ -4,50 +4,77 @@ const axios = require('axios');
 
 const TMDB_KEY = process.env.TMDB_KEY || "b80e5b1b965da72a2a23ba5680cb778a";
 
-// 🚀 TURBO CACHE: Shared memory (2 Hours)
+// 🚀 CACHE: Keep catalogs in memory for 2 hours
 const CACHE = new Map();
 const CACHE_TIME = 2 * 60 * 60 * 1000; 
 
-// 🏷️ GENRE MAP
-const GENRES = {
-    28: "Action", 12: "Adventure", 16: "Animation", 35: "Comedy", 80: "Crime", 
-    99: "Documentary", 18: "Drama", 10751: "Family", 14: "Fantasy", 36: "History", 
-    27: "Horror", 10402: "Music", 9648: "Mystery", 10749: "Romance", 878: "Sci-Fi", 
-    10770: "TV Movie", 53: "Thriller", 10752: "War", 37: "Western", 10759: "Action/Adventure",
-    10762: "Kids", 10765: "Sci-Fi/Fantasy", 10768: "War/Politics"
+// 🏷️ GENRE LIST (For the Dropdown Menu)
+const GENRE_OY = [
+    "Action", "Adventure", "Animation", "Comedy", "Crime", 
+    "Documentary", "Drama", "Family", "Fantasy", "History", 
+    "Horror", "Music", "Mystery", "Romance", "Sci-Fi", 
+    "Thriller", "War", "Western"
+];
+
+// 🔢 MAP NAMES TO TMDB IDs
+const GENRE_ID = {
+    "Action": 28, "Adventure": 12, "Animation": 16, "Comedy": 35, "Crime": 80,
+    "Documentary": 99, "Drama": 18, "Family": 10751, "Fantasy": 14, "History": 36,
+    "Horror": 27, "Music": 10402, "Mystery": 9648, "Romance": 10749, "Sci-Fi": 878,
+    "Thriller": 53, "War": 10752, "Western": 37, "TV Movie": 10770, "War & Politics": 10768,
+    "Sci-Fi & Fantasy": 10765, "Kids": 10762, "Action & Adventure": 10759
 };
 
 const builder = new addonBuilder({
-    id: "org.sojustream.catalog.final", 
-    version: "12.8.3", // 👈 BUMPED VERSION
-    name: "SojuStream (Stable)",
-    description: "K-Drama Menus • Global Search • High Stability",
+    id: "org.sojustream.catalog.nusearch", 
+    version: "13.0.0", // 👈 Major update
+    name: "SojuStream (Catalogs Only)",
+    description: "K-Drama Menus • Genre Filters • No Search",
     resources: ["catalog", "meta"],
     types: ["movie", "series"],
     catalogs: [
-        // 🔍 UNIFIED SEARCH
+        // 📂 CATALOGS WITH FILTERS ENABLED
         { 
             type: "movie", 
-            id: "soju_search", 
-            name: "🔍 Soju Search", 
-            extra: [{ name: "search", isRequired: true }] 
+            id: "kmovie_popular", 
+            name: "Popular K-Movies", 
+            extra: [
+                { name: "genre", options: GENRE_OY }, // 👈 This enables the Dropdown!
+                { name: "skip" }
+            ] 
+        },
+        { 
+            type: "movie", 
+            id: "kmovie_new", 
+            name: "New K-Movies", 
+            extra: [
+                { name: "genre", options: GENRE_OY }, 
+                { name: "skip" }
+            ] 
         },
         { 
             type: "series", 
-            id: "soju_search", 
-            name: "🔍 Soju Search", 
-            extra: [{ name: "search", isRequired: true }] 
+            id: "kdrama_popular", 
+            name: "Popular K-Dramas", 
+            extra: [
+                { name: "genre", options: GENRE_OY }, 
+                { name: "skip" }
+            ] 
         },
-        // 📂 CATALOGS (Strictly Korean)
-        { type: "movie", id: "kmovie_popular", name: "Popular K-Movies", extra: [{ name: "skip" }] },
-        { type: "movie", id: "kmovie_new", name: "New K-Movies", extra: [{ name: "skip" }] },
-        { type: "series", id: "kdrama_popular", name: "Popular K-Dramas", extra: [{ name: "skip" }] },
-        { type: "series", id: "kdrama_new", name: "New K-Dramas", extra: [{ name: "skip" }] }
+        { 
+            type: "series", 
+            id: "kdrama_new", 
+            name: "New K-Dramas", 
+            extra: [
+                { name: "genre", options: GENRE_OY }, 
+                { name: "skip" }
+            ] 
+        }
     ],
     idPrefixes: ["tmdb:"]
 });
 
-// 🛡️ STRICT FILTER
+// 🛡️ STRICT SAFETY FILTER
 function isSafeContent(item) {
     if (!item.poster_path) return false;
     const title = (item.title || item.name || "").toLowerCase();
@@ -65,46 +92,33 @@ function isSafeContent(item) {
 builder.defineCatalogHandler(async function(args) {
     const skip = args.extra?.skip || 0;
     const page = Math.floor(skip / 20) + 1;
+    const genre = args.extra?.genre; // 👈 Capture the selected genre
     
-    // 🧠 SHARED BRAIN: Global Search uses one cache key for both types
-    const uniqueId = args.extra?.search ? "soju_search_shared" : args.id;
-    const cacheKey = `${uniqueId}-${page}-${args.extra?.search || ''}`;
+    // Cache Key includes Genre now
+    const cacheKey = `${args.id}-${page}-${genre || 'all'}`;
 
     if (CACHE.has(cacheKey)) {
         const cachedData = CACHE.get(cacheKey);
-        if (Date.now() - cachedData.time < CACHE_TIME) {
-            let results = cachedData.data;
-            if (args.id === 'soju_search') {
-                results = results.filter(m => m.type === args.type); 
-            }
-            return { metas: results };
-        }
+        if (Date.now() - cachedData.time < CACHE_TIME) return { metas: cachedData.data };
     }
 
     const date = new Date().toISOString().split('T')[0];
-    const baseParams = `api_key=${TMDB_KEY}&language=en-US&include_adult=false&with_original_language=ko&page=${page}`;
-    let fetchUrl = "";
-    
-    // 🎨 DISPLAY RULES
-    const showGenre = !args.extra?.search; 
-    const showYear = args.id.includes('popular');
+    let fetchUrl = `https://api.themoviedb.org/3/discover/${args.type === 'movie' ? 'movie' : 'tv'}?api_key=${TMDB_KEY}&language=en-US&include_adult=false&with_original_language=ko&page=${page}`;
 
-    if (args.extra?.search) {
-        // 🌍 GLOBAL SEARCH
-        fetchUrl = `https://api.themoviedb.org/3/search/multi?api_key=${TMDB_KEY}&query=${encodeURIComponent(args.extra.search)}&language=en-US&include_adult=false`;
-    } else if (args.id === 'kmovie_popular') {
-        fetchUrl = `https://api.themoviedb.org/3/discover/movie?${baseParams}&sort_by=vote_count.desc&vote_count.gte=50`;
-    } else if (args.id === 'kmovie_new') {
-        fetchUrl = `https://api.themoviedb.org/3/discover/movie?${baseParams}&sort_by=primary_release_date.desc&primary_release_date.lte=${date}&vote_count.gte=10`;
-    } else if (args.id === 'kdrama_popular') {
-        fetchUrl = `https://api.themoviedb.org/3/discover/tv?${baseParams}&sort_by=vote_count.desc&vote_count.gte=50`;
-    } else if (args.id === 'kdrama_new') {
-        fetchUrl = `https://api.themoviedb.org/3/discover/tv?${baseParams}&sort_by=first_air_date.desc&first_air_date.lte=${date}&vote_count.gte=5`;
+    // 🧩 FILTER LOGIC: If user picked a genre, add it to TMDB request
+    if (genre && GENRE_ID[genre]) {
+        fetchUrl += `&with_genres=${GENRE_ID[genre]}`;
+    }
+
+    // Sort Logic
+    if (args.id.includes('popular')) {
+        fetchUrl += `&sort_by=vote_count.desc&vote_count.gte=20`;
+    } else {
+        fetchUrl += `&sort_by=primary_release_date.desc&primary_release_date.lte=${date}&vote_count.gte=5`;
     }
 
     try {
-        // ⏱️ INCREASED TIMEOUT: 15s (Prevents "Failed to Fetch" on slow starts)
-        const response = await axios.get(fetchUrl, { timeout: 15000 });
+        const response = await axios.get(fetchUrl, { timeout: 10000 });
         let items = response.data.results || [];
 
         // 🛡️ STRICT FILTER
@@ -112,20 +126,21 @@ builder.defineCatalogHandler(async function(args) {
 
         const metas = items.map(item => {
             const year = (item.release_date || item.first_air_date || "").substring(0, 4);
-            const genreList = (item.genre_ids || []).map(id => GENRES[id]).filter(Boolean).slice(0, 2);
             
-            // 📝 DESCRIPTION BUILDER (This creates the "Filter" look)
+            // Reverse Lookup Genre Names for Display
+            const genreNames = (item.genre_ids || []).map(id => Object.keys(GENRE_ID).find(key => GENRE_ID[key] === id)).filterHB => Boolean(HB).slice(0, 2);
+
+            // 📝 VISUAL TEXT (Year + Genre in Description)
             let descPrefix = "";
-            if (showYear && year) descPrefix += `[${year}] `;
-            if (showGenre && genreList.length > 0) descPrefix += `${genreList.join('/')}`;
+            if (year) descPrefix += `[${year}] `;
+            if (genreNames.length > 0) descPrefix += `${genreNames.join('/')}`;
             if (descPrefix) descPrefix += "\n\n";
 
             return {
                 id: `tmdb:${item.id}`,
-                type: item.media_type === 'movie' || (!item.media_type && args.type === 'movie') ? 'movie' : 'series',
+                type: args.type,
                 name: item.title || item.name, 
                 releaseInfo: year,
-                genres: genreList,
                 description: `${descPrefix}${item.overview || ""}`,
                 poster: `https://image.tmdb.org/t/p/w342${item.poster_path}`,
                 posterShape: 'poster'
@@ -133,11 +148,6 @@ builder.defineCatalogHandler(async function(args) {
         });
 
         CACHE.set(cacheKey, { time: Date.now(), data: metas });
-
-        if (args.id === 'soju_search') {
-            return { metas: metas.filter(m => m.type === args.type) };
-        }
-
         return { metas };
     } catch (e) { 
         console.error("Fetch Error:", e.message);
@@ -145,6 +155,7 @@ builder.defineCatalogHandler(async function(args) {
     }
 });
 
+// --- META HANDLER ---
 builder.defineMetaHandler(async function(args) {
     if (!args.id.startsWith("tmdb:")) return { meta: {} };
     const tmdbId = args.id.split(":")[1];
