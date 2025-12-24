@@ -4,16 +4,25 @@ const axios = require('axios');
 
 const TMDB_KEY = process.env.TMDB_KEY || "b80e5b1b965da72a2a23ba5680cb778a";
 
-// 🚀 FAST CACHE: Stores results for 1 hour so repeat loads are instant
+// 🚀 TURBO CACHE: Store results for 2 hours
 const CACHE = new Map();
-const CACHE_TIME = 60 * 60 * 1000; 
+const CACHE_TIME = 2 * 60 * 60 * 1000;
+
+// 🏷️ GENRE MAP
+const GENRES = {
+    28: "Action", 12: "Adventure", 16: "Animation", 35: "Comedy", 80: "Crime", 
+    99: "Documentary", 18: "Drama", 10751: "Family", 14: "Fantasy", 36: "History", 
+    27: "Horror", 10402: "Music", 9648: "Mystery", 10749: "Romance", 878: "Sci-Fi", 
+    10770: "TV Movie", 53: "Thriller", 10752: "War", 37: "Western", 10759: "Action/Adventure",
+    10762: "Kids", 10765: "Sci-Fi/Fantasy", 10768: "War/Politics"
+};
 
 const builder = new addonBuilder({
-    id: "org.sojustream.catalog.turbo", 
-    version: "12.2.0",
-    name: "SojuStream (Fast & Safe)",
-    description: "K-Drama & Movie • Strict Filter • Turbo Speed",
-    resources: ["catalog", "meta"], 
+    id: "org.sojustream.catalog.turbo",
+    version: "12.3.0",
+    name: "SojuStream (Turbo)",
+    description: "K-Drama/Movie • Genres & Years • High Speed",
+    resources: ["catalog", "meta"],
     types: ["movie", "series"],
     catalogs: [
         { type: "movie", id: "kmovie_popular", name: "Popular K-Movies", extra: [{ name: "search" }, { name: "skip" }] },
@@ -24,15 +33,13 @@ const builder = new addonBuilder({
     idPrefixes: ["tmdb:"]
 });
 
-// 🛡️ YOUR STRICT CONTENT FILTER (Restored)
+// 🛡️ STRICT CONTENT FILTER
 function isSafeContent(item) {
     if (!item.poster_path) return false;
     const title = (item.title || item.name || "").toLowerCase();
     const overview = (item.overview || "").toLowerCase();
-    
     const banList = ["erotic","sex","porn","xxx","18+","uncensored","nude","nudity","r-rated","adult only","av idol","jav","sexual","intercourse","carnal","orgasm","incest","taboo","rape","gangbang","fetish","hardcore","softcore","uncut","voluptuous","lingerie"];
     const tropeList = ["young mother","mother-in-law","sister-in-law","friend's mom","friend's mother","boarding house","massage shop","massage salon","private lesson","tutor","stepmother","stepmom","stepdaughter","stepson","stepparent","affair 2","affair 3"];
-
     if (banList.some(word => title.includes(word))) return false;
     if (tropeList.some(phrase => title.includes(phrase))) return false;
     if (banList.some(word => overview.includes(` ${word} `))) return false;
@@ -40,20 +47,20 @@ function isSafeContent(item) {
 }
 
 builder.defineCatalogHandler(async function(args) {
-    const page = (args.extra && args.extra.skip ? Math.floor(args.extra.skip / 20) + 1 : 1);
-    const date = new Date().toISOString().split('T')[0];
+    const skip = args.extra?.skip || 0;
+    const page = Math.floor(skip / 20) + 1;
     const cacheKey = `${args.id}-${page}-${args.extra?.search || ''}`;
 
-    // ⚡ Check Cache First
     if (CACHE.has(cacheKey)) {
         const cached = CACHE.get(cacheKey);
         if (Date.now() - cached.time < CACHE_TIME) return { metas: cached.data };
     }
 
+    const date = new Date().toISOString().split('T')[0];
     const baseParams = `api_key=${TMDB_KEY}&language=en-US&include_adult=false&with_original_language=ko&page=${page}`;
     let fetchUrl = "";
 
-    if (args.extra && args.extra.search) {
+    if (args.extra?.search) {
         fetchUrl = `https://api.themoviedb.org/3/search/multi?api_key=${TMDB_KEY}&query=${encodeURIComponent(args.extra.search)}&language=en-US&include_adult=false`;
     } else if (args.id === 'kmovie_popular') {
         fetchUrl = `https://api.themoviedb.org/3/discover/movie?${baseParams}&sort_by=vote_count.desc&vote_count.gte=50`;
@@ -66,60 +73,48 @@ builder.defineCatalogHandler(async function(args) {
     }
 
     try {
-        const response = await axios.get(fetchUrl, { timeout: 8000 }); 
-        let items = response.data.results || [];
-        const safeItems = items.filter(isSafeContent);
+        const response = await axios.get(fetchUrl, { timeout: 5000 });
+        const safeItems = (response.data.results || []).filter(isSafeContent);
 
-        const metas = safeItems.map(item => ({
-            id: `tmdb:${item.id}`,
-            type: item.media_type === 'movie' || args.type === 'movie' ? 'movie' : 'series',
-            name: item.title || item.name,
-            poster: `https://image.tmdb.org/t/p/w342${item.poster_path}`, // ⚡ Faster loading size
-            description: item.overview ? item.overview.substring(0, 180) + "..." : "" // ⚡ Lighter payload
-        }));
+        const metas = safeItems.map(item => {
+            const year = (item.release_date || item.first_air_date || "").substring(0, 4);
+            const genreList = (item.genre_ids || []).map(id => GENRES[id]).filter(Boolean).slice(0, 2);
+            
+            return {
+                id: `tmdb:${item.id}`,
+                type: item.media_type === 'movie' || args.type === 'movie' ? 'movie' : 'series',
+                name: item.title || item.name,
+                description: `${year ? '[' + year + '] ' : ''}${genreList.join('/')}\n\n${item.overview || ""}`,
+                poster: `https://image.tmdb.org/t/p/w342${item.poster_path}`,
+                posterShape: 'poster'
+            };
+        });
 
         CACHE.set(cacheKey, { time: Date.now(), data: metas });
         return { metas };
-    } catch (e) {
-        return { metas: [] }; 
-    }
+    } catch (e) { return { metas: [] }; }
 });
 
-// --- META HANDLER (Kept exactly as original) ---
 builder.defineMetaHandler(async function(args) {
     if (!args.id.startsWith("tmdb:")) return { meta: {} };
     const tmdbId = args.id.split(":")[1];
     const type = args.type === 'series' ? 'tv' : 'movie';
-
     try {
-        const url = `https://api.themoviedb.org/3/${type}/${tmdbId}?api_key=${TMDB_KEY}&language=en-US`;
-        const meta = (await axios.get(url)).data;
-
-        const result = {
-            id: args.id,
-            type: args.type,
-            name: meta.title || meta.name,
+        const meta = (await axios.get(`https://api.themoviedb.org/3/${type}/${tmdbId}?api_key=${TMDB_KEY}&language=en-US`)).data;
+        return { meta: {
+            id: args.id, type: args.type, name: meta.title || meta.name,
             poster: `https://image.tmdb.org/t/p/w500${meta.poster_path}`,
             background: meta.backdrop_path ? `https://image.tmdb.org/t/p/original${meta.backdrop_path}` : null,
             description: meta.overview,
             releaseInfo: (meta.release_date || meta.first_air_date || "").substring(0, 4),
-            videos: []
-        };
-
-        if (args.type === 'series') {
-            try {
-                const s1Url = `https://api.themoviedb.org/3/tv/${tmdbId}/season/1?api_key=${TMDB_KEY}&language=en-US`;
-                const s1Data = (await axios.get(s1Url)).data;
-                result.videos = s1Data.episodes.map(ep => ({
-                    id: `tmdb:${tmdbId}:${ep.season_number}:${ep.episode_number}`,
-                    title: ep.name || `Episode ${ep.episode_number}`,
-                    released: new Date(ep.air_date).toISOString(),
-                    episode: ep.episode_number,
-                    season: ep.season_number,
-                }));
-            } catch (e) {}
-        }
-        return { meta: result };
+            genres: (meta.genres || []).map(g => g.name),
+            videos: args.type === 'series' ? (await axios.get(`https://api.themoviedb.org/3/tv/${tmdbId}/season/1?api_key=${TMDB_KEY}`)).data.episodes.map(ep => ({
+                id: `tmdb:${tmdbId}:${ep.season_number}:${ep.episode_number}`,
+                title: ep.name || `Episode ${ep.episode_number}`,
+                released: new Date(ep.air_date).toISOString(),
+                episode: ep.episode_number, season: ep.season_number
+            })) : []
+        }};
     } catch (e) { return { meta: {} }; }
 });
 
