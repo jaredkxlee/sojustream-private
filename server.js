@@ -18,27 +18,27 @@ const GENRES = {
 };
 
 const builder = new addonBuilder({
-    id: "org.sojustream.catalog.turbo",
-    version: "12.4.1", 
-    name: "SojuStream (Turbo)",
-    description: "K-Drama/Movie • Unified Search • High Speed",
+    id: "org.sojustream.catalog.final", 
+    version: "12.7.0", 
+    name: "SojuStream (Final)",
+    description: "K-Drama/Movie • Strict Filter • Unified Search",
     resources: ["catalog", "meta"],
     types: ["movie", "series"],
     catalogs: [
-        // 🔍 UNIFIED SEARCH (Reduces resources by combining 4 searches into 1)
+        // 🔍 UNIFIED SEARCH (Shared Cache)
         { 
             type: "movie", 
             id: "soju_search", 
-            name: "🔍 Soju Search (Movies)", 
+            name: "🔍 Soju Search", 
             extra: [{ name: "search", isRequired: true }] 
         },
         { 
             type: "series", 
             id: "soju_search", 
-            name: "🔍 Soju Search (Series)", 
+            name: "🔍 Soju Search", 
             extra: [{ name: "search", isRequired: true }] 
         },
-        // 📂 REGULAR LISTS (No search bars here to save resources)
+        // 📂 CATALOGS
         { type: "movie", id: "kmovie_popular", name: "Popular K-Movies", extra: [{ name: "skip" }] },
         { type: "movie", id: "kmovie_new", name: "New K-Movies", extra: [{ name: "skip" }] },
         { type: "series", id: "kdrama_popular", name: "Popular K-Dramas", extra: [{ name: "skip" }] },
@@ -47,13 +47,15 @@ const builder = new addonBuilder({
     idPrefixes: ["tmdb:"]
 });
 
-// 🛡️ STRICT CONTENT FILTER
+// 🛡️ STRICT FILTER
 function isSafeContent(item) {
     if (!item.poster_path) return false;
     const title = (item.title || item.name || "").toLowerCase();
     const overview = (item.overview || "").toLowerCase();
+    
     const banList = ["erotic","sex","porn","xxx","18+","uncensored","nude","nudity","r-rated","adult only","av idol","jav","sexual","intercourse","carnal","orgasm","incest","taboo","rape","gangbang","fetish","hardcore","softcore","uncut","voluptuous","lingerie"];
     const tropeList = ["young mother","mother-in-law","sister-in-law","friend's mom","friend's mother","boarding house","massage shop","massage salon","private lesson","tutor","stepmother","stepmom","stepdaughter","stepson","stepparent","affair 2","affair 3"];
+
     if (banList.some(word => title.includes(word))) return false;
     if (tropeList.some(phrase => title.includes(phrase))) return false;
     if (banList.some(word => overview.includes(` ${word} `))) return false;
@@ -63,20 +65,35 @@ function isSafeContent(item) {
 builder.defineCatalogHandler(async function(args) {
     const skip = args.extra?.skip || 0;
     const page = Math.floor(skip / 20) + 1;
-    const cacheKey = `${args.id}-${page}-${args.extra?.search || ''}`;
+    
+    // 🧠 SHARED CACHE KEY (Search uses same key for Movie & Series)
+    const uniqueId = args.extra?.search ? "soju_search_shared" : args.id;
+    const cacheKey = `${uniqueId}-${page}-${args.extra?.search || ''}`;
 
     if (CACHE.has(cacheKey)) {
-        const cached = CACHE.get(cacheKey);
-        if (Date.now() - cached.time < CACHE_TIME) return { metas: cached.data };
+        const cachedData = CACHE.get(cacheKey);
+        if (Date.now() - cachedData.time < CACHE_TIME) {
+            let results = cachedData.data;
+            if (args.id === 'soju_search') {
+                results = results.filter(m => m.type === args.type); 
+            }
+            return { metas: results };
+        }
     }
 
     const date = new Date().toISOString().split('T')[0];
     const baseParams = `api_key=${TMDB_KEY}&language=en-US&include_adult=false&with_original_language=ko&page=${page}`;
     let fetchUrl = "";
     
-    const showYear = args.id.includes('popular') || args.id === 'soju_search';
+    // 🎨 DISPLAY LOGIC (The "Filter" Visuals)
+    // 1. Catalogs: Show Genre.
+    // 2. Search: Show NOTHING (Clean).
+    const showGenre = !args.extra?.search; 
+    
+    // 3. Popular Catalog: Show Year.
+    const showYear = args.id.includes('popular');
 
-    if (args.id === 'soju_search' && args.extra?.search) {
+    if (args.extra?.search) {
         fetchUrl = `https://api.themoviedb.org/3/search/multi?api_key=${TMDB_KEY}&query=${encodeURIComponent(args.extra.search)}&language=en-US&include_adult=false`;
     } else if (args.id === 'kmovie_popular') {
         fetchUrl = `https://api.themoviedb.org/3/discover/movie?${baseParams}&sort_by=vote_count.desc&vote_count.gte=50`;
@@ -89,41 +106,42 @@ builder.defineCatalogHandler(async function(args) {
     }
 
     try {
-        const response = await axios.get(fetchUrl, { timeout: 5000 });
+        const response = await axios.get(fetchUrl, { timeout: 6000 });
         let items = response.data.results || [];
 
-        // 🇰🇷 STRICT KOREAN FILTER: 
-        // We now filter manually to ensure the original language is Korean ('ko')
-        items = items.filter(i => i.original_language === 'ko');
+        items = items.filter(i => i.original_language === 'ko'); // Korean Only
+        items = items.filter(isSafeContent); // Strict Safety
 
-        // 🧹 UNIFIED SEARCH FILTERING: 
-        if (args.id === 'soju_search') {
-            if (args.type === 'movie') items = items.filter(i => i.media_type === 'movie');
-            else if (args.type === 'series') items = items.filter(i => i.media_type === 'tv');
-        }
-
-        const safeItems = items.filter(isSafeContent);
-
-        const metas = safeItems.map(item => {
+        const metas = items.map(item => {
             const year = (item.release_date || item.first_air_date || "").substring(0, 4);
             const genreList = (item.genre_ids || []).map(id => GENRES[id]).filter(Boolean).slice(0, 2);
-            const rawTitle = item.title || item.name;
-
-            const finalName = (showYear && year) ? `${rawTitle} (${year})` : rawTitle;
             
+            // 📝 DESCRIPTION BUILDER
+            let descPrefix = "";
+            if (showYear && year) descPrefix += `[${year}] `;
+            if (showGenre &&TX genreList.length > 0) descPrefix += `${genreList.join('/')}`;
+            
+            // Add newline if we added any prefix
+            if (descPrefix) descPrefix += "\n\n";
+
             return {
                 id: `tmdb:${item.id}`,
-                type: item.media_type === 'movie' || args.type === 'movie' ? 'movie' : 'series',
-                name: finalName, 
-                releaseInfo: showYear ? year : null, 
+                type: item.media_type === 'movie' || (!item.media_type && args.type === 'movie') ? 'movie' : 'series',
+                name: item.title || item.name, 
+                releaseInfo: year,
                 genres: genreList,
-                description: `${genreList.join(' / ')}\n\n${item.overview || ""}`, 
+                description: `${descPrefix}${item.overview || ""}`, 
                 poster: `https://image.tmdb.org/t/p/w342${item.poster_path}`,
                 posterShape: 'poster'
             };
         });
 
         CACHE.set(cacheKey, { time: Date.now(), data: metas });
+
+        if (args.id === 'soju_search') {
+            return { metas: metas.filter(m => m.type === args.type) };
+        }
+
         return { metas };
     } catch (e) { return { metas: [] }; }
 });
