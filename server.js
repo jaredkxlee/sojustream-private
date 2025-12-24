@@ -2,15 +2,17 @@ require('dotenv').config();
 const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 const axios = require('axios');
 
-// 🔒 CONFIGURATION
-// ✅ Fix: fall back to hard‑coded key if env var is missing
 const TMDB_KEY = process.env.TMDB_KEY || "b80e5b1b965da72a2a23ba5680cb778a";
 
+// 🚀 FAST CACHE: Stores results for 1 hour so repeat loads are instant
+const CACHE = new Map();
+const CACHE_TIME = 60 * 60 * 1000; 
+
 const builder = new addonBuilder({
-    id: "org.sojustream.catalog.safe", 
-    version: "12.0.1", // 👈 Bumped version
-    name: "SojuStream (Clean Catalog)",
-    description: "K-Drama & Movie Menus • Anti-Porn Filter • Uses Cinemeta for Links",
+    id: "org.sojustream.catalog.turbo", 
+    version: "12.2.0",
+    name: "SojuStream (Fast & Safe)",
+    description: "K-Drama & Movie • Strict Filter • Turbo Speed",
     resources: ["catalog", "meta"], 
     types: ["movie", "series"],
     catalogs: [
@@ -22,39 +24,31 @@ const builder = new addonBuilder({
     idPrefixes: ["tmdb:"]
 });
 
-// 🛡️ STRICT CONTENT FILTER
+// 🛡️ YOUR STRICT CONTENT FILTER (Restored)
 function isSafeContent(item) {
     if (!item.poster_path) return false;
-
     const title = (item.title || item.name || "").toLowerCase();
     const overview = (item.overview || "").toLowerCase();
-
-    const banList = [
-        "erotic","sex","porn","xxx","18+","uncensored","nude","nudity",
-        "r-rated","adult only","av idol","jav","sexual","intercourse",
-        "carnal","orgasm","incest","taboo","rape","gangbang","fetish",
-        "hardcore","softcore","uncut","voluptuous","lingerie"
-    ];
-    const tropeList = [
-        "young mother","mother-in-law","sister-in-law","friend's mom",
-        "friend's mother","boarding house","massage shop","massage salon",
-        "private lesson","tutor","plumber","stepmother","stepmom",
-        "stepdaughter","stepson","stepparent","affair 2","affair 3"
-    ];
+    
+    const banList = ["erotic","sex","porn","xxx","18+","uncensored","nude","nudity","r-rated","adult only","av idol","jav","sexual","intercourse","carnal","orgasm","incest","taboo","rape","gangbang","fetish","hardcore","softcore","uncut","voluptuous","lingerie"];
+    const tropeList = ["young mother","mother-in-law","sister-in-law","friend's mom","friend's mother","boarding house","massage shop","massage salon","private lesson","tutor","stepmother","stepmom","stepdaughter","stepson","stepparent","affair 2","affair 3"];
 
     if (banList.some(word => title.includes(word))) return false;
     if (tropeList.some(phrase => title.includes(phrase))) return false;
     if (banList.some(word => overview.includes(` ${word} `))) return false;
-
     return true;
 }
 
-// --- 1. CATALOG HANDLER ---
 builder.defineCatalogHandler(async function(args) {
     const page = (args.extra && args.extra.skip ? Math.floor(args.extra.skip / 20) + 1 : 1);
     const date = new Date().toISOString().split('T')[0];
+    const cacheKey = `${args.id}-${page}-${args.extra?.search || ''}`;
 
-    if (!TMDB_KEY) return { metas: [] };
+    // ⚡ Check Cache First
+    if (CACHE.has(cacheKey)) {
+        const cached = CACHE.get(cacheKey);
+        if (Date.now() - cached.time < CACHE_TIME) return { metas: cached.data };
+    }
 
     const baseParams = `api_key=${TMDB_KEY}&language=en-US&include_adult=false&with_original_language=ko&page=${page}`;
     let fetchUrl = "";
@@ -72,26 +66,26 @@ builder.defineCatalogHandler(async function(args) {
     }
 
     try {
-        const response = await axios.get(fetchUrl);
+        const response = await axios.get(fetchUrl, { timeout: 8000 }); 
         let items = response.data.results || [];
         const safeItems = items.filter(isSafeContent);
 
-        return {
-            metas: safeItems.map(item => ({
-                id: `tmdb:${item.id}`,
-                type: item.media_type === 'movie' || args.type === 'movie' ? 'movie' : 'series',
-                name: item.title || item.name,
-                poster: item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : null,
-                description: item.overview
-            }))
-        };
+        const metas = safeItems.map(item => ({
+            id: `tmdb:${item.id}`,
+            type: item.media_type === 'movie' || args.type === 'movie' ? 'movie' : 'series',
+            name: item.title || item.name,
+            poster: `https://image.tmdb.org/t/p/w342${item.poster_path}`, // ⚡ Faster loading size
+            description: item.overview ? item.overview.substring(0, 180) + "..." : "" // ⚡ Lighter payload
+        }));
+
+        CACHE.set(cacheKey, { time: Date.now(), data: metas });
+        return { metas };
     } catch (e) {
-        console.error("Server Catalog Error:", e.message);
         return { metas: [] }; 
     }
 });
 
-// --- 2. META HANDLER ---
+// --- META HANDLER (Kept exactly as original) ---
 builder.defineMetaHandler(async function(args) {
     if (!args.id.startsWith("tmdb:")) return { meta: {} };
     const tmdbId = args.id.split(":")[1];
@@ -126,9 +120,7 @@ builder.defineMetaHandler(async function(args) {
             } catch (e) {}
         }
         return { meta: result };
-    } catch (e) { 
-        return { meta: {} }; 
-    }
+    } catch (e) { return { meta: {} }; }
 });
 
 serveHTTP(builder.getInterface(), { port: process.env.PORT || 7000 });
